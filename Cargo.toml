@@ -1,0 +1,22 @@
+[package]
+name = "esp-at-nal"
+description = "Network layer client for ESP-AT modems"
+keywords = ["ESP8266", "network", "no_std", "at"]
+categories  = ["embedded", "network-programming", "no-std"]
+authors = ["PEGASUS GmbH <info@pegasus-aero.de>"]
+license = "MIT OR Apache-2.0"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/pegasus-aero/rt-LTC681X"
+readme = "README.md"
+documentation = "https://docs.rs/esp-at-nal"
+
+[dependencies]
+atat = "0.17.0"
+
+[dev-dependencies]
+mockall = "0.11.2"
+
+[features]
+# Fail on warnings
+strict = []
