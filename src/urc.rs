@@ -13,6 +13,10 @@ pub enum URCMessages {
     WifiDisconnected,
     /// Received an IP from the access point
     ReceivedIP,
+    /// Socket with the given link_id connected
+    SocketConnected(usize),
+    /// Socket with the given link_id closed
+    SocketClosed(usize),
     /// Unknown URC message
     Unknown,
 }
@@ -21,6 +25,12 @@ impl AtatUrc for URCMessages {
     type Response = Self;
 
     fn parse(resp: &[u8]) -> Option<Self::Response> {
+        match &resp[1..resp.len() - 2] {
+            b",CONNECT" => return Some(Self::SocketConnected(URCMessages::parse_link_id(resp[0])?)),
+            b",CLOSED" => return Some(Self::SocketClosed(URCMessages::parse_link_id(resp[0])?)),
+            _ => {}
+        }
+
         match &resp[..resp.len() - 2] {
             b"ready" => Some(Self::Ready),
             b"WIFI CONNECTED" => Some(Self::WifiConnected),
@@ -31,8 +41,25 @@ impl AtatUrc for URCMessages {
     }
 }
 
+impl URCMessages {
+    /// Parses the socket id. Currently supports just socket 0-4
+    fn parse_link_id(link_id: u8) -> Option<usize> {
+        match link_id {
+            0x30 => Some(0),
+            0x31 => Some(1),
+            0x32 => Some(2),
+            0x33 => Some(3),
+            0x34 => Some(4),
+            _ => None,
+        }
+    }
+}
+
 const KEY_READY: &str = "ready";
 const KEY_WIFI: &str = "WIFI";
+
+const CONN_CONNECT_PREFIX: &str = ",CONNECT";
+const CONN_CLOSE_PREFIX: &str = ",CLOSED";
 
 impl Parser for URCMessages {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
@@ -57,8 +84,14 @@ impl Parser for URCMessages {
             return Err(ParseError::NoMatch);
         }
 
+        let ok_return = Ok((&buf[start..eof + 2], eof + 2));
+
         if line == KEY_READY || &line[..4] == KEY_WIFI {
-            return Ok((&buf[start..eof + 2], eof + 2));
+            return ok_return;
+        }
+
+        if &line[1..] == CONN_CONNECT_PREFIX || &line[1..] == CONN_CLOSE_PREFIX {
+            return ok_return;
         }
 
         Err(ParseError::NoMatch)

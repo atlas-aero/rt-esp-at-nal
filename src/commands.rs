@@ -1,6 +1,8 @@
 use crate::responses::NoResponse;
+use alloc::string::ToString;
 use atat::atat_derive::AtatCmd;
 use atat::heapless::String;
+use embedded_nal::{SocketAddrV4, SocketAddrV6};
 
 /// Sets the WIFI mode + optionally enables/disables auto_connect
 #[derive(Clone, Default, AtatCmd)]
@@ -42,7 +44,7 @@ impl AccessPointConnectCommand {
 
 /// Enables/Disables multiple connections
 #[derive(Clone, AtatCmd)]
-#[at_cmd("+CIPMUX", NoResponse, timeout_ms = 5_000)]
+#[at_cmd("+CIPMUX", NoResponse, timeout_ms = 1_000)]
 pub struct SetMultipleConnectionsCommand {
     /// 0: single connection, 1: multiple connections
     mode: usize,
@@ -52,5 +54,60 @@ impl SetMultipleConnectionsCommand {
     /// Enables multiple connections
     pub fn multiple() -> Self {
         Self { mode: 1 }
+    }
+}
+
+/// Sets the socket receiving mode
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPRECVMODE", NoResponse, timeout_ms = 1_000)]
+pub struct SetSocketReceivingModeCommand {
+    /// 0: active mode => ESP-AT will send all the received socket data instantly to the host MCU
+    /// 1: passive mode => ESP-AT will keep the received socket data in an internal buffer
+    mode: usize,
+}
+
+impl SetSocketReceivingModeCommand {
+    /// Enables the passive receiving mode
+    pub fn passive_mode() -> Self {
+        Self { mode: 1 }
+    }
+}
+
+/// Establish TCP Connection, UDP Transmission, or SSL Connection
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPSTART", NoResponse, timeout_ms = 5_000, attempts = 1)]
+pub struct ConnectCommand {
+    /// Socket ID
+    link_id: usize,
+
+    /// Connection type, e.g. TCP, TCPv6, SSL, etc.
+    connection_type: String<5>,
+
+    /// Remote IPv4 or IPV6 address
+    remote_host: String<39>,
+
+    /// Remote port
+    port: u16,
+}
+
+impl ConnectCommand {
+    /// Establishes a IPv4 TCP connection
+    pub fn tcp_v4(link_id: usize, remote: SocketAddrV4) -> Self {
+        Self {
+            link_id,
+            connection_type: String::from("TCP"),
+            remote_host: String::from(remote.ip().to_string().as_str()),
+            port: remote.port(),
+        }
+    }
+
+    /// Establishes a IPv6 TCP connection
+    pub fn tcp_v6(link_id: usize, remote: SocketAddrV6) -> Self {
+        Self {
+            link_id,
+            connection_type: String::from("TCPv6"),
+            remote_host: String::from(remote.ip().to_string().as_str()),
+            port: remote.port(),
+        }
     }
 }

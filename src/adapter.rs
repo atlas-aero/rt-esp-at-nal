@@ -17,6 +17,9 @@ pub struct Adapter<A: AtatClient> {
     /// True if multiple connections have been enabled
     pub(crate) multi_connections_enabled: bool,
 
+    /// True if socket passive receiving mode is enabled
+    pub(crate) passive_mode_enabled: bool,
+
     /// Current socket states, array index = link_id
     pub(crate) sockets: [SocketState; 5],
 }
@@ -62,6 +65,7 @@ impl<A: AtatClient> Adapter<A> {
             joined: false,
             ip_assigned: false,
             multi_connections_enabled: false,
+            passive_mode_enabled: false,
             sockets: [SocketState::Closed; 5],
         }
     }
@@ -98,6 +102,8 @@ impl<A: AtatClient> Adapter<A> {
             Some(URCMessages::ReceivedIP) => self.ip_assigned = true,
             Some(URCMessages::WifiConnected) => self.joined = true,
             Some(URCMessages::Ready) => {}
+            Some(URCMessages::SocketConnected(link_id)) => self.sockets[link_id] = SocketState::Connected,
+            Some(URCMessages::SocketClosed(link_id)) => self.sockets[link_id] = SocketState::Closing,
             Some(URCMessages::Unknown) => {}
             None => return false,
         };

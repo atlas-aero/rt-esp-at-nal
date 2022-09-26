@@ -57,6 +57,18 @@ fn test_first_parse_wifi() {
 }
 
 #[test]
+fn test_first_parse_connection_connected() {
+    assert_result(b"0,CONNECT\r\n", 11, b"0,CONNECT\r\nNEXT LINE\r\n");
+    assert_result(b"0,CONNECT\r\n", 13, b"\r\n0,CONNECT\r\n");
+}
+
+#[test]
+fn test_first_parse_connection_closed() {
+    assert_result(b"0,CLOSED\r\n", 10, b"0,CLOSED\r\nNEXT LINE\r\n");
+    assert_result(b"0,CLOSED\r\n", 12, b"\r\n0,CLOSED\r\n");
+}
+
+#[test]
 fn test_second_parse_ready() {
     assert_eq!(
         URCMessages::Ready,
@@ -94,6 +106,32 @@ fn test_second_parse_wifi_unknown() {
         URCMessages::Unknown,
         <URCMessages as AtatUrc>::parse(b"WIFI UNDEFINED\r\n").unwrap()
     );
+}
+
+#[test]
+fn test_second_parse_socket_connected_valid_link_id() {
+    assert_eq!(
+        URCMessages::SocketConnected(0),
+        <URCMessages as AtatUrc>::parse(b"0,CONNECT\r\n").unwrap()
+    );
+}
+
+#[test]
+fn test_second_parse_socket_connected_invalid_link_id() {
+    assert!(<URCMessages as AtatUrc>::parse(b"5,CONNECT\r\n").is_none())
+}
+
+#[test]
+fn test_second_parse_socket_closed_valid_link_id() {
+    assert_eq!(
+        URCMessages::SocketClosed(2),
+        <URCMessages as AtatUrc>::parse(b"2,CLOSED\r\n").unwrap()
+    );
+}
+
+#[test]
+fn test_second_parse_socket_closed_invalid_link_id() {
+    assert!(<URCMessages as AtatUrc>::parse(b"5,CLOSED\r\n").is_none())
 }
 
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {

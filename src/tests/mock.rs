@@ -16,6 +16,9 @@ pub struct MockAtatClient {
     /// Mocked URC messages which get returned in the same order as inserted
     urc_messages: VecDeque<&'static [u8]>,
 
+    /// Returns no URC messages on the first N calls
+    urc_skp_count: usize,
+
     /// send() call count
     send_count: usize,
 
@@ -37,6 +40,20 @@ impl AtatClient for MockAtatClient {
 
         self.send_count += 1;
         nb::Result::Ok(response)
+    }
+
+    fn check_urc<URC: AtatUrc>(&mut self) -> Option<URC::Response> {
+        if self.urc_skp_count > 0 {
+            self.urc_skp_count -= 1;
+            return None;
+        }
+
+        let mut return_urc = None;
+        self.peek_urc_with::<URC, _>(|urc| {
+            return_urc = Some(urc);
+            true
+        });
+        return_urc
     }
 
     fn peek_urc_with<URC: AtatUrc, F: FnOnce(URC::Response) -> bool>(&mut self, f: F) {
@@ -66,6 +83,7 @@ impl MockAtatClient {
             commands: vec![],
             responses: VecDeque::new(),
             urc_messages: VecDeque::new(),
+            urc_skp_count: 0,
             send_count: 0,
             send_would_block: None,
         }
@@ -119,6 +137,26 @@ impl MockAtatClient {
     /// Simulates a 'ready' URC message
     pub fn add_urc_ready(&mut self) {
         self.add_urc_message(b"ready\r\n");
+    }
+
+    /// Simulates a connected socket state change
+    pub fn add_urc_first_socket_connected(&mut self) {
+        self.add_urc_message(b"0,CONNECT\r\n");
+    }
+
+    /// Simulates a connected socket state change
+    pub fn add_urc_second_socket_connected(&mut self) {
+        self.add_urc_message(b"1,CONNECT\r\n");
+    }
+
+    /// Simulates a connected socket state change
+    pub fn add_urc_first_socket_closed(&mut self) {
+        self.add_urc_message(b"0,CLOSED\r\n");
+    }
+
+    /// Skips the given number of calls to check_urc()
+    pub fn skip_urc(&mut self, count: usize) {
+        self.urc_skp_count = count;
     }
 
     /// Returns a copy of the sent commands
