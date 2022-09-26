@@ -6,6 +6,7 @@ extern crate alloc;
 pub mod adapter;
 pub(crate) mod commands;
 pub(crate) mod responses;
+pub mod stack;
 pub mod urc;
 
 #[cfg(test)]

@@ -1,4 +1,5 @@
 use crate::commands::{AccessPointConnectCommand, WifiModeCommand};
+use crate::stack::SocketState;
 use crate::urc::URCMessages;
 use atat::{AtatClient, Error as AtError};
 
@@ -12,6 +13,12 @@ pub struct Adapter<A: AtatClient> {
 
     /// True if an IP was assigned by access point. Get updated by URC message.
     ip_assigned: bool,
+
+    /// True if multiple connections have been enabled
+    pub(crate) multi_connections_enabled: bool,
+
+    /// Current socket states, array index = link_id
+    pub(crate) sockets: [SocketState; 5],
 }
 
 /// Possible errors when joining an access point
@@ -54,6 +61,8 @@ impl<A: AtatClient> Adapter<A> {
             client,
             joined: false,
             ip_assigned: false,
+            multi_connections_enabled: false,
+            sockets: [SocketState::Closed; 5],
         }
     }
 

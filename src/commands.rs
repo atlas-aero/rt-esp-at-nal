@@ -39,3 +39,18 @@ impl AccessPointConnectCommand {
         Self { ssid, password }
     }
 }
+
+/// Enables/Disables multiple connections
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPMUX", NoResponse, timeout_ms = 5_000)]
+pub struct SetMultipleConnectionsCommand {
+    /// 0: single connection, 1: multiple connections
+    mode: usize,
+}
+
+impl SetMultipleConnectionsCommand {
+    /// Enables multiple connections
+    pub fn multiple() -> Self {
+        Self { mode: 1 }
+    }
+}
