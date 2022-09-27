@@ -1,7 +1,7 @@
-use crate::commands::{AccessPointConnectCommand, WifiModeCommand};
+use crate::commands::{AccessPointConnectCommand, CommandErrorHandler, WifiModeCommand};
 use crate::stack::SocketState;
 use crate::urc::URCMessages;
-use atat::{AtatClient, Error as AtError};
+use atat::{AtatClient, AtatCmd, Error as AtError};
 
 /// Central client for network communication
 pub struct Adapter<A: AtatClient> {
@@ -114,14 +114,7 @@ impl<A: AtatClient> Adapter<A> {
     /// Sends the command for switching to station mode
     fn set_station_mode(&mut self) -> Result<(), JoinError> {
         let command = WifiModeCommand::station_mode();
-        if let nb::Result::Err(error) = self.client.send(&command) {
-            return match error {
-                nb::Error::Other(other) => Err(JoinError::ModeError(other)),
-                nb::Error::WouldBlock => Err(JoinError::UnexpectedWouldBlock),
-            };
-        }
-
-        Ok(())
+        self.send_command(command)
     }
 
     /// Sends the command for setting the WIFI credentials
@@ -135,12 +128,21 @@ impl<A: AtatClient> Adapter<A> {
         }
 
         let command = AccessPointConnectCommand::new(ssid.into(), key.into());
-        match self.client.send(&command) {
-            Ok(_) => Ok(()),
-            Err(error) => match error {
-                nb::Error::Other(other) => Err(JoinError::ConnectError(other)),
-                nb::Error::WouldBlock => Err(JoinError::UnexpectedWouldBlock),
-            },
+        self.send_command(command)
+    }
+
+    /// Sends a command and maps the error if the command failed
+    pub(crate) fn send_command<Cmd: AtatCmd<LEN> + CommandErrorHandler, const LEN: usize>(
+        &mut self,
+        command: Cmd,
+    ) -> Result<(), Cmd::Error> {
+        if let nb::Result::Err(error) = self.client.send(&command) {
+            return match error {
+                nb::Error::Other(other) => Err(command.command_error(other)),
+                nb::Error::WouldBlock => Err(Cmd::WOULD_BLOCK_ERROR),
+            };
         }
+
+        Ok(())
     }
 }

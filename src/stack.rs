@@ -80,25 +80,14 @@ impl<A: AtatClient> TcpClientStack for Adapter<A> {
             SocketAddr::V6(address) => ConnectCommand::tcp_v6(socket.link_id, address),
         };
 
-        match self.client.send(&command) {
-            Ok(_) => {
-                self.process_urc_messages();
+        self.send_command(command)?;
+        self.process_urc_messages();
 
-                if self.sockets[socket.link_id] != SocketState::Connected {
-                    nb::Result::Err(nb::Error::Other(Error::ConnectUnconfirmed))
-                } else {
-                    nb::Result::Ok(())
-                }
-            }
-            Err(nb_error) => {
-                let error = match nb_error {
-                    nb::Error::Other(other) => Error::ConnectError(other),
-                    nb::Error::WouldBlock => Error::UnexpectedWouldBlock,
-                };
-
-                nb::Result::Err(nb::Error::Other(error))
-            }
+        if self.sockets[socket.link_id] != SocketState::Connected {
+            return nb::Result::Err(nb::Error::Other(Error::ConnectUnconfirmed));
         }
+
+        nb::Result::Ok(())
     }
 
     fn is_connected(&mut self, _socket: &Self::TcpSocket) -> Result<bool, Self::Error> {
@@ -126,14 +115,7 @@ impl<A: AtatClient> Adapter<A> {
             return Ok(());
         }
 
-        let command = SetMultipleConnectionsCommand::multiple();
-        if let nb::Result::Err(error) = self.client.send(&command) {
-            return match error {
-                nb::Error::Other(other) => Err(Error::EnablingMultiConnectionsFailed(other)),
-                nb::Error::WouldBlock => Err(Error::UnexpectedWouldBlock),
-            };
-        }
-
+        self.send_command(SetMultipleConnectionsCommand::multiple())?;
         self.multi_connections_enabled = true;
         Ok(())
     }
@@ -145,14 +127,7 @@ impl<A: AtatClient> Adapter<A> {
             return Ok(());
         }
 
-        let command = SetSocketReceivingModeCommand::passive_mode();
-        if let nb::Result::Err(error) = self.client.send(&command) {
-            return match error {
-                nb::Error::Other(other) => Err(Error::EnablingPassiveSocketModeFailed(other)),
-                nb::Error::WouldBlock => Err(Error::UnexpectedWouldBlock),
-            };
-        }
-
+        self.send_command(SetSocketReceivingModeCommand::passive_mode())?;
         self.passive_mode_enabled = true;
         Ok(())
     }
