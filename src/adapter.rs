@@ -163,6 +163,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             Some(URCMessages::ReceivedBytes(count)) => self.recv_byte_count = Some(count),
             Some(URCMessages::SendConfirmation) => self.send_confirmed = Some(true),
             Some(URCMessages::SendFail) => self.send_confirmed = Some(false),
+            Some(URCMessages::DataAvailable(_, _)) => {}
             Some(URCMessages::Unknown) => {}
             None => return false,
         };

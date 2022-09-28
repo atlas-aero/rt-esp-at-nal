@@ -22,6 +22,9 @@ pub enum URCMessages {
     SendConfirmation,
     /// Transmission of socket data failed
     SendFail,
+    /// Data is available in passive receiving mode.
+    /// First value = link_id, Second value = available byte count
+    DataAvailable(usize, usize),
     /// Unknown URC message
     Unknown,
 }
@@ -30,6 +33,10 @@ impl AtatUrc for URCMessages {
     type Response = Self;
 
     fn parse(resp: &[u8]) -> Option<Self::Response> {
+        if &resp[..4] == b"+IPD" {
+            return URCMessages::parse_data_available(resp);
+        }
+
         match &resp[1..resp.len() - 2] {
             b",CONNECT" => return Some(Self::SocketConnected(URCMessages::parse_link_id(resp[0])?)),
             b",CLOSED" => return Some(Self::SocketClosed(URCMessages::parse_link_id(resp[0])?)),
@@ -78,6 +85,17 @@ impl URCMessages {
 
         None
     }
+
+    /// Parses the +IPD message
+    fn parse_data_available(data: &[u8]) -> Option<Self> {
+        let string = core::str::from_utf8(&data[..data.len() - 2]).ok()?;
+        let mut parts = string.split(",");
+
+        let link_id = parts.nth(1)?.parse().ok()?;
+        let length = parts.last()?.parse().ok()?;
+
+        Some(Self::DataAvailable(link_id, length))
+    }
 }
 
 impl Parser for URCMessages {
@@ -110,6 +128,7 @@ impl Parser for URCMessages {
             }
 
             if line == "ready"
+                || &line[..4] == "+IPD"
                 || line == "SEND OK"
                 || line == "SEND FAIL"
                 || &line[..4] == "WIFI"

@@ -1,6 +1,6 @@
 use crate::commands::{
-    AccessPointConnectCommand, ConnectCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand,
-    TransmissionPrepareCommand, WifiModeCommand,
+    AccessPointConnectCommand, ConnectCommand, ObtainLocalAddressCommand, SetMultipleConnectionsCommand,
+    SetSocketReceivingModeCommand, TransmissionPrepareCommand, WifiModeCommand,
 };
 use crate::urc::URCMessages;
 use atat::heapless::String;
@@ -23,6 +23,10 @@ fn test_first_parse_incomplete_line() {
     assert!(<URCMessages as Parser>::parse(b"ready\r").is_err());
     assert!(<URCMessages as Parser>::parse(b"ready\n").is_err());
     assert!(<URCMessages as Parser>::parse(b"ready").is_err());
+    assert!(<URCMessages as Parser>::parse(b"+IPD").is_err());
+    assert!(<URCMessages as Parser>::parse(b"\r\n+IPD").is_err());
+    assert!(<URCMessages as Parser>::parse(b"+IPD,5").is_err());
+    assert!(<URCMessages as Parser>::parse(b"+IPD,5,100").is_err());
 }
 
 #[test]
@@ -94,6 +98,7 @@ fn test_first_parse_not_matching_cmd_echo() {
         0,
         SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
     ));
+    assert_cmd_echo_not_matching(ObtainLocalAddressCommand::new());
 }
 
 #[test]
@@ -110,6 +115,7 @@ fn test_first_parse_not_matching_cmd_error() {
         0,
         SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
     ));
+    assert_cmd_error_not_matching(ObtainLocalAddressCommand::new());
 }
 
 #[test]
@@ -130,6 +136,13 @@ fn test_first_parse_send_ok() {
 fn test_first_parse_send_fail() {
     assert_result(b"SEND FAIL\r\n", 11, b"SEND FAIL\r\n");
     assert_result(b"SEND FAIL\r\n", 17, b"\r\n\r\n\r\nSEND FAIL\r\n");
+}
+
+#[test]
+fn test_first_parse_data_available() {
+    assert_result(b"+IPD,0,100\r\n", 12, b"+IPD,0,100\r\n");
+    assert_result(b"+IPD,4,2048\r\n", 13, b"+IPD,4,2048\r\n");
+    assert_result(b"+IPD,0,100\r\n", 18, b"\r\n\r\n\r\n+IPD,0,100\r\n");
 }
 
 #[test]
@@ -226,6 +239,31 @@ fn test_second_parse_send_fail() {
         URCMessages::SendFail,
         <URCMessages as AtatUrc>::parse(b"SEND FAIL\r\n").unwrap()
     );
+}
+
+#[test]
+fn test_second_parse_data_available_correct() {
+    assert_eq!(
+        URCMessages::DataAvailable(3, 256),
+        <URCMessages as AtatUrc>::parse(b"+IPD,3,256\r\n").unwrap()
+    );
+}
+
+#[test]
+fn test_second_parse_data_available_incomplete() {
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3,\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,,200\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD\r\n").is_none());
+}
+
+#[test]
+fn test_second_parse_data_available_invalid_numbers() {
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3,A\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,A,200\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,-1,200\r\n").is_none());
+    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,0,-5\r\n").is_none());
 }
 
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {
