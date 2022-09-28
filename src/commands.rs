@@ -3,8 +3,8 @@ use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
 use alloc::string::ToString;
 use atat::atat_derive::AtatCmd;
-use atat::heapless::String;
-use atat::Error as AtError;
+use atat::heapless::{String, Vec};
+use atat::{AtatCmd, Error as AtError, InternalError};
 use embedded_nal::{SocketAddrV4, SocketAddrV6};
 
 /// Trait for mapping command errors
@@ -169,5 +169,66 @@ impl CommandErrorHandler for ConnectCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         StackError::ConnectError(error)
+    }
+}
+
+/// Initiates the transmission of data
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPSEND", NoResponse, timeout_ms = 1_000, attempts = 1)]
+pub struct TransmissionPrepareCommand {
+    /// Socket ID
+    link_id: usize,
+
+    /// Length of the data to transmit
+    length: usize,
+}
+
+impl TransmissionPrepareCommand {
+    pub fn new(link_id: usize, length: usize) -> Self {
+        Self { link_id, length }
+    }
+}
+
+impl CommandErrorHandler for TransmissionPrepareCommand {
+    type Error = StackError;
+    const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        StackError::TransmissionStartFailed(error)
+    }
+}
+
+/// The actual transmission of data. Max. data length: 256 bytes
+pub struct TransmissionCommand<'a> {
+    data: &'a [u8],
+}
+
+impl<'a> TransmissionCommand<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self { data }
+    }
+}
+
+impl<'a, const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'a> {
+    type Response = NoResponse;
+
+    const MAX_TIMEOUT_MS: u32 = 5000;
+    const EXPECTS_RESPONSE_CODE: bool = false;
+
+    fn as_bytes(&self) -> Vec<u8, LEN> {
+        Vec::from_slice(self.data).unwrap()
+    }
+
+    fn parse(&self, _resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtError> {
+        Ok(NoResponse {})
+    }
+}
+
+impl<'a> CommandErrorHandler for TransmissionCommand<'a> {
+    type Error = StackError;
+    const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        StackError::SendFailed(error)
     }
 }

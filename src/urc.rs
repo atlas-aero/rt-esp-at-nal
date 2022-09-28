@@ -1,6 +1,5 @@
 use atat::digest::ParseError;
 use atat::{AtatUrc, Parser};
-use core::ops::Add;
 
 /// URC definitions, needs to passed as generic of [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -17,6 +16,12 @@ pub enum URCMessages {
     SocketConnected(usize),
     /// Socket with the given link_id closed
     SocketClosed(usize),
+    /// Confirmation that the given number of bytes have been received by ESP-AT
+    ReceivedBytes(usize),
+    /// Transmission of socket data was successful
+    SendConfirmation,
+    /// A general error happened, e.g data transmission failed
+    Error,
     /// Unknown URC message
     Unknown,
 }
@@ -31,8 +36,14 @@ impl AtatUrc for URCMessages {
             _ => {}
         }
 
+        if &resp[..4] == b"Recv" {
+            return Some(Self::ReceivedBytes(URCMessages::parse_receive_byte_count(resp)?));
+        }
+
         match &resp[..resp.len() - 2] {
             b"ready" => Some(Self::Ready),
+            b"SEND OK" => Some(Self::SendConfirmation),
+            b"ERROR" => Some(Self::Error),
             b"WIFI CONNECTED" => Some(Self::WifiConnected),
             b"WIFI DISCONNECT" => Some(Self::WifiDisconnected),
             b"WIFI GOT IP" => Some(Self::ReceivedIP),
@@ -53,47 +64,81 @@ impl URCMessages {
             _ => None,
         }
     }
+
+    /// Tries to parse the N byte count of 'Recv N bytes'
+    fn parse_receive_byte_count(resp: &[u8]) -> Option<usize> {
+        let postfix_start = resp.len() - 8;
+        let byte_count = &resp[5..postfix_start];
+
+        if let Ok(string) = core::str::from_utf8(byte_count) {
+            if let Ok(byte_count) = string.parse::<usize>() {
+                return Some(byte_count);
+            }
+        }
+
+        None
+    }
 }
-
-const KEY_READY: &str = "ready";
-const KEY_WIFI: &str = "WIFI";
-
-const CONN_CONNECT_PREFIX: &str = ",CONNECT";
-const CONN_CLOSE_PREFIX: &str = ",CLOSED";
 
 impl Parser for URCMessages {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
-        if buf.len() < 2 {
+        if buf.len() < 6 {
             return Err(ParseError::Incomplete);
         }
 
         let encoded = core::str::from_utf8(buf).map_err(|_| ParseError::NoMatch)?;
-        let eof = encoded[2..].find("\r\n").ok_or(ParseError::NoMatch)?.add(2);
-        let mut line = &encoded[..eof];
-
-        // Line start
         let mut start = 0;
+        let mut end = 0;
 
-        // Remove empty line
-        if &line[..2] == "\r\n" {
-            start = 2;
-            line = &line[2..];
-        }
+        for line in encoded.split("\r\n") {
+            if line.is_empty() {
+                start += 2;
+                end += 2;
+                continue;
+            }
 
-        if line.len() < 5 {
-            return Err(ParseError::NoMatch);
-        }
+            // Min. line length for matching any needles
+            if line.len() < 4 {
+                break;
+            }
 
-        let ok_return = Ok((&buf[start..eof + 2], eof + 2));
+            end += line.len() + 2;
 
-        if line == KEY_READY || &line[..4] == KEY_WIFI {
-            return ok_return;
-        }
+            // Line does not end with CRLF
+            if buf.len() < end {
+                break;
+            }
 
-        if &line[1..] == CONN_CONNECT_PREFIX || &line[1..] == CONN_CLOSE_PREFIX {
-            return ok_return;
+            if line == "ready"
+                || line == "SEND OK"
+                || line == "ERROR"
+                || &line[..4] == "WIFI"
+                || &line[1..] == ",CONNECT"
+                || &line[1..] == ",CLOSED"
+                || URCMessages::matches_receive_confirmation(line)
+            {
+                return Ok((&buf[start..end], end));
+            }
+
+            break;
         }
 
         Err(ParseError::NoMatch)
+    }
+}
+
+impl URCMessages {
+    /// Returns true if line is matching a receive confirmation e.g. "Recv 9 bytes"
+    fn matches_receive_confirmation(line: &str) -> bool {
+        if line.len() < 12 {
+            return false;
+        }
+
+        if &line[..4] != "Recv" {
+            return false;
+        }
+
+        let postfix_start = line.len() - 6;
+        &line[postfix_start..] != "bytes"
     }
 }

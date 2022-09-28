@@ -1,17 +1,21 @@
 use crate::adapter::Adapter;
-use crate::stack::Error;
-use crate::tests::mock::MockAtatClient;
-use alloc::string::ToString;
+use crate::stack::{Error, Socket};
+use crate::tests::mock::{MockAtatClient, MockTimer};
+use alloc::string::{String, ToString};
+use alloc::vec;
 use atat::Error as AtError;
 use core::str::FromStr;
 use embedded_nal::{SocketAddr, TcpClientStack};
 
+type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256>;
+
 #[test]
 fn test_socket_multi_conn_error() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_error_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.socket().unwrap_err();
     assert_eq!(Error::EnablingMultiConnectionsFailed(AtError::Parse), result);
 
@@ -22,10 +26,11 @@ fn test_socket_multi_conn_error() {
 
 #[test]
 fn test_socket_multi_conn_would_block() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.send_would_block(0);
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.socket().unwrap_err();
 
     assert_eq!(Error::UnexpectedWouldBlock, result);
@@ -33,10 +38,11 @@ fn test_socket_multi_conn_would_block() {
 
 #[test]
 fn test_socket_multi_conn_enabled_once() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     adapter.socket().unwrap();
     adapter.socket().unwrap();
 
@@ -47,10 +53,11 @@ fn test_socket_multi_conn_enabled_once() {
 
 #[test]
 fn test_socket_opened() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     assert_eq!(0, adapter.socket().unwrap().link_id);
     assert_eq!(1, adapter.socket().unwrap().link_id);
     assert_eq!(2, adapter.socket().unwrap().link_id);
@@ -60,10 +67,11 @@ fn test_socket_opened() {
 
 #[test]
 fn test_socket_not_available() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     for _ in 0..5 {
         adapter.socket().unwrap();
     }
@@ -74,13 +82,14 @@ fn test_socket_not_available() {
 
 #[test]
 fn test_connect_already_connected_by_urc() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
     client.add_ok_response();
 
     client.add_urc_first_socket_connected();
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -92,6 +101,7 @@ fn test_connect_already_connected_by_urc() {
 
 #[test]
 fn test_connect_correct_commands_ipv4() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -104,7 +114,7 @@ fn test_connect_correct_commands_ipv4() {
     client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
@@ -119,6 +129,7 @@ fn test_connect_correct_commands_ipv4() {
 
 #[test]
 fn test_connect_correct_commands_ipv6() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -131,7 +142,7 @@ fn test_connect_correct_commands_ipv6() {
     client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
@@ -149,6 +160,7 @@ fn test_connect_correct_commands_ipv6() {
 
 #[test]
 fn test_connect_receive_mode_error() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -156,7 +168,7 @@ fn test_connect_receive_mode_error() {
     // Receiving mode command
     client.add_error_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -171,6 +183,7 @@ fn test_connect_receive_mode_error() {
 
 #[test]
 fn test_connect_receive_mode_would_block() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -180,7 +193,7 @@ fn test_connect_receive_mode_would_block() {
     // Connect mode command
     client.send_would_block(2);
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -192,6 +205,7 @@ fn test_connect_receive_mode_would_block() {
 
 #[test]
 fn test_connect_connect_command_error() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -201,7 +215,7 @@ fn test_connect_connect_command_error() {
     // Connect command
     client.add_error_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -213,6 +227,7 @@ fn test_connect_connect_command_error() {
 
 #[test]
 fn test_connect_connect_command_would_block() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -220,7 +235,7 @@ fn test_connect_connect_command_would_block() {
     // Receiving mode command
     client.send_would_block(1);
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -232,6 +247,7 @@ fn test_connect_connect_command_would_block() {
 
 #[test]
 fn test_connect_receiving_mode_cmd_sent_once() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -245,7 +261,7 @@ fn test_connect_receiving_mode_cmd_sent_once() {
     client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket1 = adapter.socket().unwrap();
     let mut socket2 = adapter.socket().unwrap();
@@ -272,6 +288,7 @@ fn test_connect_receiving_mode_cmd_sent_once() {
 
 #[test]
 fn test_connect_closing_socket_reconnected() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -279,7 +296,7 @@ fn test_connect_closing_socket_reconnected() {
     // Receiving mode command
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
 
@@ -298,6 +315,7 @@ fn test_connect_closing_socket_reconnected() {
 
 #[test]
 fn test_connect_already_connected_at_second_call() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -310,7 +328,7 @@ fn test_connect_already_connected_at_second_call() {
     client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
@@ -326,6 +344,7 @@ fn test_connect_already_connected_at_second_call() {
 
 #[test]
 fn test_connect_unconfirmed() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
 
     // Multiple connections command
@@ -335,7 +354,7 @@ fn test_connect_unconfirmed() {
     // Connect command
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -343,4 +362,332 @@ fn test_connect_unconfirmed() {
         .unwrap_err();
 
     assert_eq!(nb::Error::Other(Error::ConnectUnconfirmed), error);
+}
+
+#[test]
+fn test_send_not_connected() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+
+    // Multiple connections command
+    client.add_ok_response();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = adapter.socket().unwrap();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::SocketUnconnected), error);
+}
+
+#[test]
+fn test_send_tx_prepare_error() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_error_response();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::TransmissionStartFailed(AtError::Parse)), error);
+}
+
+#[test]
+fn test_send_tx_prepare_would_block() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.send_would_block(0);
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
+}
+
+#[test]
+fn test_send_tx_command_would_block() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.send_would_block(1);
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
+}
+
+#[test]
+fn test_send_timer_start_error() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Err(100)
+    });
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::TimerError), error);
+}
+
+#[test]
+fn test_send_timer_wait_error() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::Other(100)));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::TimerError), error);
+}
+
+#[test]
+fn test_send_timeout() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+
+    timer.expect_wait().times(1).returning(|| nb::Result::Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Timeout)), error);
+}
+
+#[test]
+fn test_send_byte_count_not_matching() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_recv_bytes();
+    adapter.client.add_urc_send_ok();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::PartialSend), error);
+}
+
+#[test]
+fn test_send_ok_without_recv_message() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_send_ok();
+
+    adapter.send(&mut socket, b"test data").unwrap();
+}
+
+#[test]
+fn test_send_error_urc_message() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_error();
+    adapter.client.add_urc_recv_bytes();
+
+    let error = adapter.send(&mut socket, b"test").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
+}
+
+#[test]
+fn test_send_error_and_recv_bytes_not_matching() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_error();
+    adapter.client.add_urc_recv_bytes();
+
+    let error = adapter.send(&mut socket, b"test data").unwrap_err();
+    assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
+}
+
+#[test]
+fn test_send_correct_commands() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // TX prepare command
+    adapter.client.add_ok_response();
+    // Actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_send_ok();
+    adapter.client.add_urc_recv_bytes();
+
+    let sent_bytes = adapter.send(&mut socket, b"test").unwrap();
+    assert_eq!(4, sent_bytes);
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(5, commands.len());
+    assert_eq!("AT+CIPSEND=0,4\r\n".to_string(), commands[3]);
+    assert_eq!("test".to_string(), commands[4]);
+}
+
+#[test]
+fn test_send_multiple_calls_urc_status_reset() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(2).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_error();
+    adapter.client.add_urc_recv_bytes();
+
+    assert!(adapter.send(&mut socket, b"test").is_err());
+
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_send_ok();
+
+    let sent_bytes = adapter.send(&mut socket, b"test data").unwrap();
+    assert_eq!(9, sent_bytes);
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(7, commands.len());
+    assert_eq!("AT+CIPSEND=0,9\r\n".to_string(), commands[5]);
+    assert_eq!("test data".to_string(), commands[6]);
+}
+
+#[test]
+fn test_send_chunks() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(2).returning(|_| Ok(()));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // First TX prepare command
+    adapter.client.add_ok_response();
+    // First actual TX command
+    adapter.client.add_ok_response();
+
+    // Second TX prepare command
+    adapter.client.add_ok_response();
+    // Second actual TX command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.throttle_urc();
+    adapter.client.add_urc_send_ok();
+    adapter.client.add_urc_send_ok();
+
+    let mut buffer = vec![b'A'; 256];
+    buffer.extend_from_slice(b"second message");
+
+    let sent_bytes = adapter.send(&mut socket, buffer.as_slice()).unwrap();
+    assert_eq!(270, sent_bytes);
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(7, commands.len());
+    assert_eq!("AT+CIPSEND=0,256\r\n".to_string(), commands[3]);
+    assert_eq!(String::from_utf8(vec![b'A'; 256]).unwrap(), commands[4]);
+    assert_eq!("AT+CIPSEND=0,14\r\n".to_string(), commands[5]);
+    assert_eq!("second message".to_string(), commands[6]);
+}
+
+/// Helper for opening & connecting a socket
+fn connect_socket(adapter: &mut Adapter<MockAtatClient, MockTimer, 1_000_000, 256>) -> Socket {
+    // Receiving socket
+    adapter.client.add_ok_response();
+
+    // Connecting socket
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_first_socket_connected();
+
+    let mut socket = adapter.socket().unwrap();
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+
+    socket
 }

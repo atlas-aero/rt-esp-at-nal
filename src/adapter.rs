@@ -2,11 +2,22 @@ use crate::commands::{AccessPointConnectCommand, CommandErrorHandler, WifiModeCo
 use crate::stack::SocketState;
 use crate::urc::URCMessages;
 use atat::{AtatClient, AtatCmd, Error as AtError};
+use fugit::{ExtU32, TimerDurationU32};
+use fugit_timer::Timer;
 
 /// Central client for network communication
-pub struct Adapter<A: AtatClient> {
+///
+/// CHUNK_SIZE: Chunk size in bytes when sending data. Higher value results in better performance, but
+/// introduces also higher stack memory footprint. Max. value: 8192
+pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize> {
     /// ATAT client
     pub(crate) client: A,
+
+    /// Timer used for timeout measurement
+    pub(crate) timer: T,
+
+    /// Timeout for data transmission
+    pub(crate) send_timeout: TimerDurationU32<TIMER_HZ>,
 
     /// Currently joined to WIFI network? Gets updated by URC messages.
     joined: bool,
@@ -22,6 +33,14 @@ pub struct Adapter<A: AtatClient> {
 
     /// Current socket states, array index = link_id
     pub(crate) sockets: [SocketState; 5],
+
+    /// Received byte count confirmed by URC message. Gets reset to NONE by 'send()' method
+    pub(crate) recv_byte_count: Option<usize>,
+
+    /// True => Data transmission was confirmed by URC message
+    /// False => Data transmission error signaled by URC message
+    /// None => Neither an error or confirmed by received by URC message yet
+    pub(crate) send_confirmed: Option<bool>,
 }
 
 /// Possible errors when joining an access point
@@ -57,16 +76,22 @@ pub struct JoinState {
     pub ip_assigned: bool,
 }
 
-impl<A: AtatClient> Adapter<A> {
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize>
+    Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+{
     /// Creates a new network adapter. Client needs to be in timeout or blocking mode
-    pub fn new(client: A) -> Self {
+    pub fn new(client: A, timer: T) -> Self {
         Self {
             client,
+            timer,
+            send_timeout: 5_000.millis(),
             joined: false,
             ip_assigned: false,
             multi_connections_enabled: false,
             passive_mode_enabled: false,
             sockets: [SocketState::Closed; 5],
+            recv_byte_count: None,
+            send_confirmed: None,
         }
     }
 
@@ -104,6 +129,9 @@ impl<A: AtatClient> Adapter<A> {
             Some(URCMessages::Ready) => {}
             Some(URCMessages::SocketConnected(link_id)) => self.sockets[link_id] = SocketState::Connected,
             Some(URCMessages::SocketClosed(link_id)) => self.sockets[link_id] = SocketState::Closing,
+            Some(URCMessages::ReceivedBytes(count)) => self.recv_byte_count = Some(count),
+            Some(URCMessages::SendConfirmation) => self.send_confirmed = Some(true),
+            Some(URCMessages::Error) => self.send_confirmed = Some(false),
             Some(URCMessages::Unknown) => {}
             None => return false,
         };
@@ -144,5 +172,10 @@ impl<A: AtatClient> Adapter<A> {
         }
 
         Ok(())
+    }
+
+    /// Sets the timeout for sending TCP data in ms
+    pub fn set_send_timeout_ms(&mut self, timeout: u32) {
+        self.send_timeout = TimerDurationU32::millis(timeout);
     }
 }

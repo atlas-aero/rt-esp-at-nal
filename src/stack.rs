@@ -1,8 +1,12 @@
 use crate::adapter::Adapter;
-use crate::commands::{ConnectCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand};
+use crate::commands::{
+    ConnectCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand, TransmissionCommand,
+    TransmissionPrepareCommand,
+};
 use atat::AtatClient;
 use atat::Error as AtError;
 use embedded_nal::{SocketAddr, TcpClientStack};
+use fugit_timer::Timer;
 
 /// Unique socket for a network connection
 #[derive(Debug)]
@@ -43,6 +47,15 @@ pub enum Error {
     /// TCP connect command failed
     ConnectError(AtError),
 
+    /// Preparing the transmission failed (CIPSEND command)
+    TransmissionStartFailed(AtError),
+
+    /// Transmission of data failed
+    SendFailed(AtError),
+
+    /// AT-ESP confirmed receiving an unexpected byte count
+    PartialSend,
+
     /// TCP connect command was responded by by OK. But connect was not confirmed by URC message.
     ConnectUnconfirmed,
 
@@ -52,12 +65,23 @@ pub enum Error {
     /// Given socket is already connected to another remote. Socket needs to be closed first.
     AlreadyConnected,
 
+    /// Unable to send data if socket is not connected
+    SocketUnconnected,
+
+    /// Socket was remotely closed and needs to either reconnected to fully closed by calling `close()` for [Adapter]
+    ClosingSocket,
+
     /// Received an unexpected WouldBlock. The most common cause of errors is an incorrect mode of the client.
     /// This must be either timeout or blocking.
     UnexpectedWouldBlock,
+
+    /// Upstream timer error
+    TimerError,
 }
 
-impl<A: AtatClient> TcpClientStack for Adapter<A> {
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize> TcpClientStack
+    for Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+{
     type TcpSocket = Socket;
     type Error = Error;
 
@@ -94,8 +118,16 @@ impl<A: AtatClient> TcpClientStack for Adapter<A> {
         todo!()
     }
 
-    fn send(&mut self, _socket: &mut Self::TcpSocket, _buffer: &[u8]) -> nb::Result<usize, Self::Error> {
-        todo!()
+    fn send(&mut self, socket: &mut Socket, buffer: &[u8]) -> nb::Result<usize, Error> {
+        self.process_urc_messages();
+        self.assert_socket_connected(socket)?;
+
+        for chunk in buffer.chunks(CHUNK_SIZE) {
+            self.send_command(TransmissionPrepareCommand::new(socket.link_id, chunk.len()))?;
+            self.send_chunk(chunk)?;
+        }
+
+        nb::Result::Ok(buffer.len())
     }
 
     fn receive(&mut self, _socket: &mut Self::TcpSocket, _buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
@@ -107,7 +139,46 @@ impl<A: AtatClient> TcpClientStack for Adapter<A> {
     }
 }
 
-impl<A: AtatClient> Adapter<A> {
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize>
+    Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+{
+    /// Sends a chunk of max. 256 bytes
+    fn send_chunk(&mut self, data: &[u8]) -> Result<(), Error> {
+        self.send_confirmed = None;
+        self.recv_byte_count = None;
+
+        self.send_command::<TransmissionCommand<'_>, CHUNK_SIZE>(TransmissionCommand::new(data))?;
+        self.timer.start(self.send_timeout).map_err(|_| Error::TimerError)?;
+
+        while self.send_confirmed.is_none() {
+            self.process_urc_messages();
+
+            if let Some(send_success) = self.send_confirmed {
+                // Transmission failed
+                if !send_success {
+                    return Err(Error::SendFailed(AtError::Error));
+                }
+
+                // Byte count does not match
+                if self.recv_byte_count.is_some() && *self.recv_byte_count.as_ref().unwrap() != data.len() {
+                    return Err(Error::PartialSend);
+                }
+
+                return Ok(());
+            }
+
+            match self.timer.wait() {
+                Ok(_) => return Err(Error::SendFailed(AtError::Timeout)),
+                Err(error) => match error {
+                    nb::Error::Other(_) => return Err(Error::TimerError),
+                    nb::Error::WouldBlock => {}
+                },
+            }
+        }
+
+        Ok(())
+    }
+
     /// Enables multiple connections.
     /// Stores internal state, so command is just sent once for saving bandwidth
     fn enable_multiple_connections(&mut self) -> Result<(), Error> {
@@ -140,5 +211,18 @@ impl<A: AtatClient> Adapter<A> {
         }
 
         Err(Error::NoSocketAvailable)
+    }
+
+    /// Asserts that the given socket is connected and returns otherwise the appropriate error
+    fn assert_socket_connected(&self, socket: &Socket) -> nb::Result<(), Error> {
+        if self.sockets[socket.link_id] == SocketState::Closing {
+            return nb::Result::Err(nb::Error::Other(Error::ClosingSocket));
+        }
+
+        if self.sockets[socket.link_id] != SocketState::Connected {
+            return nb::Result::Err(nb::Error::Other(Error::SocketUnconnected));
+        }
+
+        nb::Result::Ok(())
     }
 }

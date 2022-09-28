@@ -1,14 +1,17 @@
 use crate::adapter::{Adapter, JoinError};
-use crate::tests::mock::MockAtatClient;
+use crate::tests::mock::{MockAtatClient, MockTimer};
 use alloc::string::ToString;
 use atat::Error;
+
+type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256>;
 
 #[test]
 fn test_join_mode_error() {
     let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
     client.add_error_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.join("test_wifi", "secret").unwrap_err();
 
     assert_eq!(JoinError::ModeError(Error::Parse), result);
@@ -21,9 +24,10 @@ fn test_join_mode_error() {
 #[test]
 fn test_join_mode_would_block() {
     let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
     client.send_would_block(0);
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.join("test_wifi", "secret").unwrap_err();
 
     assert_eq!(JoinError::UnexpectedWouldBlock, result);
@@ -32,10 +36,12 @@ fn test_join_mode_would_block() {
 #[test]
 fn test_join_connect_command_error() {
     let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+
     client.add_ok_response();
     client.add_error_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.join("test_wifi", "secret").unwrap_err();
 
     assert_eq!(JoinError::ConnectError(Error::Parse), result);
@@ -47,11 +53,13 @@ fn test_join_connect_command_error() {
 
 #[test]
 fn test_join_connect_command_would_block() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
+
     client.add_ok_response();
     client.send_would_block(1);
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let result = adapter.join("test_wifi", "secret").unwrap_err();
 
     assert_eq!(JoinError::UnexpectedWouldBlock, result);
@@ -63,11 +71,13 @@ fn test_join_connect_command_would_block() {
 
 #[test]
 fn test_join_correct_commands() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
+
     client.add_ok_response();
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
     let _ = adapter.join("test_wifi", "secret").unwrap();
 
     let commands = adapter.client.get_commands_as_strings();
@@ -78,12 +88,13 @@ fn test_join_correct_commands() {
 
 #[test]
 fn test_join_wifi_connected() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
     client.add_ok_response();
     client.add_urc_wifi_connected();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let result = adapter.join("test_wifi", "secret").unwrap();
     assert!(result.connected);
@@ -92,12 +103,13 @@ fn test_join_wifi_connected() {
 
 #[test]
 fn test_join_wifi_disconnect() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
     client.add_ok_response();
     client.add_urc_wifi_disconnect();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let result = adapter.join("test_wifi", "secret").unwrap();
     assert!(!result.connected);
@@ -106,13 +118,14 @@ fn test_join_wifi_disconnect() {
 
 #[test]
 fn test_join_wifi_got_ip() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
     client.add_ok_response();
     client.add_urc_wifi_connected();
     client.add_urc_wifi_got_ip();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let result = adapter.join("test_wifi", "secret").unwrap();
     assert!(result.connected);
@@ -121,6 +134,7 @@ fn test_join_wifi_got_ip() {
 
 #[test]
 fn test_join_other_urc_messages_ignored() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
     client.add_ok_response();
@@ -129,7 +143,7 @@ fn test_join_other_urc_messages_ignored() {
     client.add_urc_unknown();
     client.add_urc_wifi_got_ip();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let result = adapter.join("test_wifi", "secret").unwrap();
     assert!(result.connected);
@@ -138,11 +152,12 @@ fn test_join_other_urc_messages_ignored() {
 
 #[test]
 fn test_join_wifi_no_urc_messages() {
+    let timer = MockTimer::new();
     let mut client = MockAtatClient::new();
     client.add_ok_response();
     client.add_ok_response();
 
-    let mut adapter = Adapter::new(client);
+    let mut adapter: AdapterType = Adapter::new(client, timer);
 
     let result = adapter.join("test_wifi", "secret").unwrap();
     assert!(!result.connected);
