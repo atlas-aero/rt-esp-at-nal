@@ -1,4 +1,4 @@
-use crate::commands::{AccessPointConnectCommand, CommandErrorHandler, WifiModeCommand};
+use crate::commands::{AccessPointConnectCommand, CommandErrorHandler, SetSocketReceivingModeCommand, WifiModeCommand};
 use crate::stack::SocketState;
 use crate::urc::URCMessages;
 use atat::{AtatClient, AtatCmd, Error as AtError};
@@ -115,6 +115,9 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
     /// Processes all pending messages in the queue
     pub fn process_urc_messages(&mut self) {
         while self.handle_single_urc() {}
+
+        // Avoid full response queue, which gets full for a unknown reason
+        let _ = self.client.check_response(&SetSocketReceivingModeCommand::passive_mode());
     }
 
     /// Checks a single pending URC message. Returns false, if no URC message is pending

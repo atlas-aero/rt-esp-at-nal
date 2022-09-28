@@ -91,7 +91,7 @@ impl AtatClient for MockAtatClient {
     }
 
     fn check_response<A: AtatCmd<LEN>, const LEN: usize>(&mut self, _cmd: &A) -> nb::Result<A::Response, Error> {
-        unimplemented!("Currently not implemented for mock");
+        nb::Result::Err(nb::Error::WouldBlock)
     }
 
     fn get_mode(&self) -> Mode {
