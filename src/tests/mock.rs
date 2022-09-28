@@ -31,6 +31,9 @@ pub struct MockAtatClient {
     /// send() call count
     send_count: usize,
 
+    /// Call count of
+    reset_call_count: usize,
+
     /// Simulates a 'WouldBlock' response at given call index
     send_would_block: Option<usize>,
 }
@@ -92,7 +95,9 @@ impl AtatClient for MockAtatClient {
         Mode::Timeout
     }
 
-    fn reset(&mut self) {}
+    fn reset(&mut self) {
+        self.reset_call_count += 1;
+    }
 }
 
 impl MockAtatClient {
@@ -105,6 +110,7 @@ impl MockAtatClient {
             throttle_urc: false,
             throttle_urc_reached: false,
             send_count: 0,
+            reset_call_count: 0,
             send_would_block: None,
         }
     }
@@ -209,6 +215,10 @@ impl MockAtatClient {
         }
 
         commands
+    }
+
+    pub fn get_reset_call_count(&self) -> usize {
+        self.reset_call_count
     }
 }
 

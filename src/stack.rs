@@ -156,6 +156,8 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             if let Some(send_success) = self.send_confirmed {
                 // Transmission failed
                 if !send_success {
+                    // Reset prompt status. Otherwise client does not match any command responses.
+                    self.client.reset();
                     return Err(Error::SendFailed(AtError::Error));
                 }
 

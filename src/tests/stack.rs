@@ -553,6 +553,7 @@ fn test_send_fail_urc_message() {
 
     let error = adapter.send(&mut socket, b"test").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
+    assert_eq!(1, adapter.client.get_reset_call_count())
 }
 
 #[test]
