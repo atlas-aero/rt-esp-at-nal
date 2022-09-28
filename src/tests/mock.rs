@@ -34,6 +34,9 @@ pub struct MockAtatClient {
     /// Call count of
     reset_call_count: usize,
 
+    /// If false, calls to reset() will panic
+    expect_reset_call: bool,
+
     /// Simulates a 'WouldBlock' response at given call index
     send_would_block: Option<usize>,
 }
@@ -96,6 +99,10 @@ impl AtatClient for MockAtatClient {
     }
 
     fn reset(&mut self) {
+        if !self.expect_reset_call {
+            panic!("Unexpected call to reset()");
+        }
+
         self.reset_call_count += 1;
     }
 }
@@ -111,6 +118,7 @@ impl MockAtatClient {
             throttle_urc_reached: false,
             send_count: 0,
             reset_call_count: 0,
+            expect_reset_call: false,
             send_would_block: None,
         }
     }
@@ -217,6 +225,12 @@ impl MockAtatClient {
         commands
     }
 
+    /// Expect calls to reset()
+    pub fn expect_reset_calls(&mut self) {
+        self.expect_reset_call = true;
+    }
+
+    /// Returns the call count of reset() method
     pub fn get_reset_call_count(&self) -> usize {
         self.reset_call_count
     }

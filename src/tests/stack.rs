@@ -487,8 +487,11 @@ fn test_send_timeout() {
     // Actual TX command
     adapter.client.add_ok_response();
 
+    adapter.client.expect_reset_calls();
+
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Timeout)), error);
+    assert_eq!(1, adapter.client.get_reset_call_count());
 }
 
 #[test]
@@ -550,6 +553,7 @@ fn test_send_fail_urc_message() {
     adapter.client.skip_urc(1);
     adapter.client.add_urc_send_fail();
     adapter.client.add_urc_recv_bytes();
+    adapter.client.expect_reset_calls();
 
     let error = adapter.send(&mut socket, b"test").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
@@ -573,9 +577,11 @@ fn test_send_error_and_recv_bytes_not_matching() {
     adapter.client.skip_urc(1);
     adapter.client.add_urc_send_fail();
     adapter.client.add_urc_recv_bytes();
+    adapter.client.expect_reset_calls();
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
+    assert_eq!(1, adapter.client.get_reset_call_count());
 }
 
 #[test]
@@ -619,8 +625,10 @@ fn test_send_multiple_calls_urc_status_reset() {
     adapter.client.skip_urc(1);
     adapter.client.add_urc_send_fail();
     adapter.client.add_urc_recv_bytes();
+    adapter.client.expect_reset_calls();
 
     assert!(adapter.send(&mut socket, b"test").is_err());
+    assert_eq!(1, adapter.client.get_reset_call_count());
 
     adapter.client.add_ok_response();
     adapter.client.add_ok_response();

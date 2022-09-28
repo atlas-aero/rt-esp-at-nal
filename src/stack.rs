@@ -170,7 +170,11 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             }
 
             match self.timer.wait() {
-                Ok(_) => return Err(Error::SendFailed(AtError::Timeout)),
+                Ok(_) => {
+                    // Reset prompt status. Otherwise client does not match any command responses.
+                    self.client.reset();
+                    return Err(Error::SendFailed(AtError::Timeout));
+                }
                 Err(error) => match error {
                     nb::Error::Other(_) => return Err(Error::TimerError),
                     nb::Error::WouldBlock => {}
