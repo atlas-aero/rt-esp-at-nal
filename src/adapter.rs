@@ -1,9 +1,17 @@
-use crate::commands::{AccessPointConnectCommand, CommandErrorHandler, SetSocketReceivingModeCommand, WifiModeCommand};
+use crate::commands::{
+    AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, SetSocketReceivingModeCommand,
+    WifiModeCommand,
+};
+use crate::responses::LocalAddressResponse;
 use crate::stack::SocketState;
 use crate::urc::URCMessages;
+use atat::heapless::Vec;
 use atat::{AtatClient, AtatCmd, Error as AtError};
+use core::str::FromStr;
+use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
+use heapless::String;
 
 /// Central client for network communication
 ///
@@ -66,6 +74,20 @@ pub enum JoinError {
     UnexpectedWouldBlock,
 }
 
+/// Errors when receiving local address information
+#[derive(Clone, Debug, PartialEq)]
+pub enum AddressErrors {
+    /// CIFSR command failed
+    CommandError(AtError),
+
+    /// Error while parsing addresses
+    AddressParseError,
+
+    /// Received an unexpected WouldBlock. The most common cause of errors is an incorrect mode of the client.
+    /// This must be either timeout or blocking.
+    UnexpectedWouldBlock,
+}
+
 /// Current WIFI connection state
 #[derive(Copy, Clone, Debug)]
 pub struct JoinState {
@@ -112,6 +134,12 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
         })
     }
 
+    /// Returns local address information
+    pub fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
+        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
+        LocalAddress::from_responses(responses)
+    }
+
     /// Processes all pending messages in the queue
     pub fn process_urc_messages(&mut self) {
         while self.handle_single_urc() {}
@@ -145,7 +173,9 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
     /// Sends the command for switching to station mode
     fn set_station_mode(&mut self) -> Result<(), JoinError> {
         let command = WifiModeCommand::station_mode();
-        self.send_command(command)
+        self.send_command(command)?;
+
+        Ok(())
     }
 
     /// Sends the command for setting the WIFI credentials
@@ -159,26 +189,81 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
         }
 
         let command = AccessPointConnectCommand::new(ssid.into(), key.into());
-        self.send_command(command)
+        self.send_command(command)?;
+
+        Ok(())
     }
 
     /// Sends a command and maps the error if the command failed
     pub(crate) fn send_command<Cmd: AtatCmd<LEN> + CommandErrorHandler, const LEN: usize>(
         &mut self,
         command: Cmd,
-    ) -> Result<(), Cmd::Error> {
-        if let nb::Result::Err(error) = self.client.send(&command) {
+    ) -> Result<Cmd::Response, Cmd::Error> {
+        let result = self.client.send(&command);
+        if let nb::Result::Err(error) = result {
             return match error {
                 nb::Error::Other(other) => Err(command.command_error(other)),
                 nb::Error::WouldBlock => Err(Cmd::WOULD_BLOCK_ERROR),
             };
         }
 
-        Ok(())
+        Ok(result.unwrap())
     }
 
     /// Sets the timeout for sending TCP data in ms
     pub fn set_send_timeout_ms(&mut self, timeout: u32) {
         self.send_timeout = TimerDurationU32::millis(timeout);
+    }
+}
+
+/// Local IP and MAC addresses
+#[derive(Default, Clone, Debug)]
+pub struct LocalAddress {
+    /// Local IPv4 address if assigned
+    pub ipv4: Option<Ipv4Addr>,
+
+    /// Local MAC address
+    pub mac: Option<String<17>>,
+
+    /// Link local IPv6 address if assigned
+    pub ipv6_link_local: Option<Ipv6Addr>,
+
+    /// Global IPv6 address if assigned
+    pub ipv6_global: Option<Ipv6Addr>,
+}
+
+impl LocalAddress {
+    pub(crate) fn from_responses(responses: Vec<LocalAddressResponse, 4>) -> Result<Self, AddressErrors> {
+        let mut data = Self::default();
+
+        for response in responses {
+            match response.address_type.as_slice() {
+                b"STAIP" => {
+                    data.ipv4 = Some(
+                        Ipv4Addr::from_str(response.address.as_str()).map_err(|_| AddressErrors::AddressParseError)?,
+                    )
+                }
+                b"STAIP6LL" => {
+                    data.ipv6_link_local = Some(
+                        Ipv6Addr::from_str(response.address.as_str()).map_err(|_| AddressErrors::AddressParseError)?,
+                    )
+                }
+                b"STAIP6GL" => {
+                    data.ipv6_global = Some(
+                        Ipv6Addr::from_str(response.address.as_str()).map_err(|_| AddressErrors::AddressParseError)?,
+                    )
+                }
+                b"STAMAC" => {
+                    if response.address.len() > 17 {
+                        return Err(AddressErrors::AddressParseError);
+                    }
+
+                    data.mac = Some(String::from(response.address.as_str()));
+                }
+                &_ => {}
+            }
+        }
+
+        Ok(data)
     }
 }

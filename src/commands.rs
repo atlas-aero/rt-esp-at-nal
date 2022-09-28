@@ -1,4 +1,5 @@
-use crate::adapter::JoinError;
+use crate::adapter::{AddressErrors, JoinError};
+use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
 use alloc::string::ToString;
@@ -72,6 +73,26 @@ impl CommandErrorHandler for AccessPointConnectCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         JoinError::ConnectError(error)
+    }
+}
+
+/// Command for receiving local address information including IP and MAC
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIFSR", Vec<LocalAddressResponse, 4>, timeout_ms = 5_000)]
+pub struct ObtainLocalAddressCommand {}
+
+impl ObtainLocalAddressCommand {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl CommandErrorHandler for ObtainLocalAddressCommand {
+    type Error = AddressErrors;
+    const WOULD_BLOCK_ERROR: Self::Error = AddressErrors::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        AddressErrors::CommandError(error)
     }
 }
 
