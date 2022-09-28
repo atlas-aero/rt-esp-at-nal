@@ -127,12 +127,6 @@ fn test_first_parse_send_ok() {
 }
 
 #[test]
-fn test_first_parse_error() {
-    assert_result(b"ERROR\r\n", 7, b"ERROR\r\n");
-    assert_result(b"ERROR\r\n", 13, b"\r\n\r\n\r\nERROR\r\n");
-}
-
-#[test]
 fn test_first_parse_send_fail() {
     assert_result(b"SEND FAIL\r\n", 11, b"SEND FAIL\r\n");
     assert_result(b"SEND FAIL\r\n", 17, b"\r\n\r\n\r\nSEND FAIL\r\n");
@@ -223,14 +217,6 @@ fn test_second_parse_send_ok() {
     assert_eq!(
         URCMessages::SendConfirmation,
         <URCMessages as AtatUrc>::parse(b"SEND OK\r\n").unwrap()
-    );
-}
-
-#[test]
-fn test_second_parse_error() {
-    assert_eq!(
-        URCMessages::Error,
-        <URCMessages as AtatUrc>::parse(b"ERROR\r\n").unwrap()
     );
 }
 

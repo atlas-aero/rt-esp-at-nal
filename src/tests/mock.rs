@@ -175,11 +175,6 @@ impl MockAtatClient {
         self.add_urc_message(b"SEND OK\r\n");
     }
 
-    /// Simulates a 'ERROR' URC message
-    pub fn add_urc_error(&mut self) {
-        self.add_urc_message(b"ERROR\r\n");
-    }
-
     /// Simulates a 'SEND FAIL' URC message
     pub fn add_urc_send_fail(&mut self) {
         self.add_urc_message(b"SEND FAIL\r\n");

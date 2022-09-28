@@ -131,7 +131,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             Some(URCMessages::SocketClosed(link_id)) => self.sockets[link_id] = SocketState::Closing,
             Some(URCMessages::ReceivedBytes(count)) => self.recv_byte_count = Some(count),
             Some(URCMessages::SendConfirmation) => self.send_confirmed = Some(true),
-            Some(URCMessages::Error) | Some(URCMessages::SendFail) => self.send_confirmed = Some(false),
+            Some(URCMessages::SendFail) => self.send_confirmed = Some(false),
             Some(URCMessages::Unknown) => {}
             None => return false,
         };

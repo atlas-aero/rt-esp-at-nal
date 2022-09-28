@@ -534,28 +534,6 @@ fn test_send_ok_without_recv_message() {
 }
 
 #[test]
-fn test_send_error_urc_message() {
-    let mut timer = MockTimer::new();
-    timer.expect_start().times(1).returning(|_| Ok(()));
-
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let mut socket = connect_socket(&mut adapter);
-
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_error();
-    adapter.client.add_urc_recv_bytes();
-
-    let error = adapter.send(&mut socket, b"test").unwrap_err();
-    assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
-}
-
-#[test]
 fn test_send_fail_urc_message() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
@@ -592,7 +570,7 @@ fn test_send_error_and_recv_bytes_not_matching() {
     adapter.client.add_ok_response();
 
     adapter.client.skip_urc(1);
-    adapter.client.add_urc_error();
+    adapter.client.add_urc_send_fail();
     adapter.client.add_urc_recv_bytes();
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
@@ -638,7 +616,7 @@ fn test_send_multiple_calls_urc_status_reset() {
     adapter.client.add_ok_response();
     adapter.client.add_ok_response();
     adapter.client.skip_urc(1);
-    adapter.client.add_urc_error();
+    adapter.client.add_urc_send_fail();
     adapter.client.add_urc_recv_bytes();
 
     assert!(adapter.send(&mut socket, b"test").is_err());

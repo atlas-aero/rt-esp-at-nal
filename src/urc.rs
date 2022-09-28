@@ -22,8 +22,6 @@ pub enum URCMessages {
     SendConfirmation,
     /// Transmission of socket data failed
     SendFail,
-    /// A general error happened
-    Error,
     /// Unknown URC message
     Unknown,
 }
@@ -46,7 +44,6 @@ impl AtatUrc for URCMessages {
             b"ready" => Some(Self::Ready),
             b"SEND OK" => Some(Self::SendConfirmation),
             b"SEND FAIL" => Some(Self::SendFail),
-            b"ERROR" => Some(Self::Error),
             b"WIFI CONNECTED" => Some(Self::WifiConnected),
             b"WIFI DISCONNECT" => Some(Self::WifiDisconnected),
             b"WIFI GOT IP" => Some(Self::ReceivedIP),
@@ -114,7 +111,6 @@ impl Parser for URCMessages {
 
             if line == "ready"
                 || line == "SEND OK"
-                || line == "ERROR"
                 || line == "SEND FAIL"
                 || &line[..4] == "WIFI"
                 || &line[1..] == ",CONNECT"
