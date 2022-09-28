@@ -133,6 +133,12 @@ fn test_first_parse_error() {
 }
 
 #[test]
+fn test_first_parse_send_fail() {
+    assert_result(b"SEND FAIL\r\n", 11, b"SEND FAIL\r\n");
+    assert_result(b"SEND FAIL\r\n", 17, b"\r\n\r\n\r\nSEND FAIL\r\n");
+}
+
+#[test]
 fn test_second_parse_ready() {
     assert_eq!(
         URCMessages::Ready,
@@ -225,6 +231,14 @@ fn test_second_parse_error() {
     assert_eq!(
         URCMessages::Error,
         <URCMessages as AtatUrc>::parse(b"ERROR\r\n").unwrap()
+    );
+}
+
+#[test]
+fn test_second_parse_send_fail() {
+    assert_eq!(
+        URCMessages::SendFail,
+        <URCMessages as AtatUrc>::parse(b"SEND FAIL\r\n").unwrap()
     );
 }
 

@@ -180,6 +180,11 @@ impl MockAtatClient {
         self.add_urc_message(b"ERROR\r\n");
     }
 
+    /// Simulates a 'SEND FAIL' URC message
+    pub fn add_urc_send_fail(&mut self) {
+        self.add_urc_message(b"SEND FAIL\r\n");
+    }
+
     /// Simulates a connected socket state change
     pub fn add_urc_second_socket_connected(&mut self) {
         self.add_urc_message(b"1,CONNECT\r\n");
