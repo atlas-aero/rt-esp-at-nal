@@ -7,7 +7,7 @@ use atat::Error as AtError;
 use core::str::FromStr;
 use embedded_nal::{SocketAddr, TcpClientStack};
 
-type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256>;
+type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 4>;
 
 #[test]
 fn test_socket_multi_conn_error() {
@@ -682,8 +682,216 @@ fn test_send_chunks() {
     assert_eq!("second message".to_string(), commands[6]);
 }
 
+#[test]
+fn test_receive_no_data_available() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // Other socket
+    adapter.client.add_urc_message(b"+IPD,3,256\r\n");
+
+    let mut buffer = [0x0; 32];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+
+    assert_eq!(0, length);
+    assert_eq!([0x0; 32], buffer);
+}
+
+#[test]
+fn test_receive_receive_command_failed() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_error_response();
+    adapter.client.add_urc_message(b"+IPD,0,256\r\n");
+
+    let mut buffer = [0x0; 32];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+    assert_eq!(nb::Error::Other(Error::ReceiveFailed(AtError::Parse)), error);
+}
+
+#[test]
+fn test_receive_receive_command_would_block() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.send_would_block(0);
+    adapter.client.add_urc_message(b"+IPD,0,256\r\n");
+
+    let mut buffer = [0x0; 32];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
+}
+
+#[test]
+fn test_receive_no_data_received() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,256\r\n");
+    adapter.client.add_ok_response();
+
+    let mut buffer = [0x0; 32];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+    assert_eq!(nb::Error::Other(Error::ReceiveFailed(AtError::InvalidResponse)), error);
+}
+
+#[test]
+fn test_receive_correct_command() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,4\r\n");
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
+
+    let mut buffer = [b' '; 16];
+    adapter.receive(&mut socket, &mut buffer).unwrap();
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(4, commands.len());
+    assert_eq!("AT+CIPRECVDATA=0,4\r\n".to_string(), commands[3]);
+}
+
+#[test]
+fn test_receive_data_received_buffer_bigger_then_block_size() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,10\r\n");
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,4:bbbb");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:cc");
+
+    let mut buffer = [b' '; 16];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+
+    assert_eq!(10, length);
+    assert_eq!(b"aaaabbbbcc      ", &buffer);
+}
+
+#[test]
+fn test_receive_data_received_buffer_smaller_then_block_size() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,5\r\n");
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:bb");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,1:c");
+
+    let mut buffer = [b' '; 2];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+    assert_eq!(2, length);
+    assert_eq!(b"aa", &buffer);
+
+    let mut buffer = [b' '; 2];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+    assert_eq!(2, length);
+    assert_eq!(b"bb", &buffer);
+
+    let mut buffer = [b' '; 2];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+    assert_eq!(1, length);
+    assert_eq!(b"c ", &buffer);
+}
+
+#[test]
+fn test_receive_data_received_less_data_received_then_requested() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,10\r\n");
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    // 4 bytes requested, but just two bytes received
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,4:bbbb");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:cc");
+
+    let mut buffer = [b' '; 16];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+
+    assert_eq!(10, length);
+    assert_eq!(b"aaaabbbbcc      ", &buffer);
+}
+
+/// This can just happen if ESP-AT sends more data then requested, which is a protocol violation.
+#[test]
+fn test_receive_data_received_more_data_received_then_block_size() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,5\r\n");
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    // 4 bytes requested, but 5 received
+    adapter.client.add_urc_message(b"+CIPRECVDATA,5:aaaaa");
+
+    let mut buffer = [b' '; 16];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+    assert_eq!(nb::Error::Other(Error::ReceiveFailed(AtError::InvalidResponse)), error);
+}
+
+/// This can just happen if ESP-AT sends more data then requested, which is a protocol violation.
+#[test]
+fn test_receive_data_received_buffer_overflow() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,5\r\n");
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+
+    adapter.client.throttle_urc();
+    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
+    adapter.client.add_urc_message(b"+CIPRECVDATA,2:bb");
+
+    let mut buffer = [b' '; 5];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+    assert_eq!(nb::Error::Other(Error::ReceiveOverflow), error);
+}
+
 /// Helper for opening & connecting a socket
-fn connect_socket(adapter: &mut Adapter<MockAtatClient, MockTimer, 1_000_000, 256>) -> Socket {
+fn connect_socket(adapter: &mut AdapterType) -> Socket {
     // Receiving socket
     adapter.client.add_ok_response();
 

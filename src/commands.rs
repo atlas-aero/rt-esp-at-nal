@@ -147,7 +147,7 @@ impl CommandErrorHandler for SetSocketReceivingModeCommand {
 
 /// Establish TCP Connection, UDP Transmission, or SSL Connection
 #[derive(Clone, AtatCmd)]
-#[at_cmd("+CIPSTART", NoResponse, timeout_ms = 5_000, attempts = 1)]
+#[at_cmd("+CIPSTART", NoResponse, timeout_ms = 5_000)]
 pub struct ConnectCommand {
     /// Socket ID
     link_id: usize,
@@ -195,7 +195,7 @@ impl CommandErrorHandler for ConnectCommand {
 
 /// Initiates the transmission of data
 #[derive(Clone, AtatCmd)]
-#[at_cmd("+CIPSEND", NoResponse, timeout_ms = 1_000, attempts = 1)]
+#[at_cmd("+CIPSEND", NoResponse, timeout_ms = 1_000)]
 pub struct TransmissionPrepareCommand {
     /// Socket ID
     link_id: usize,
@@ -251,5 +251,31 @@ impl<'a> CommandErrorHandler for TransmissionCommand<'a> {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         StackError::SendFailed(error)
+    }
+}
+
+/// Command for receiving data
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPRECVDATA", NoResponse, timeout_ms = 1_000)]
+pub struct ReceiveDataCommand<const RESP_LEN: usize> {
+    /// Socket ID
+    link_id: usize,
+
+    /// Length in bytes to receive
+    length: usize,
+}
+
+impl<const RESP_LEN: usize> ReceiveDataCommand<RESP_LEN> {
+    pub fn new(link_id: usize, length: usize) -> Self {
+        Self { link_id, length }
+    }
+}
+
+impl<const RESP_LEN: usize> CommandErrorHandler for ReceiveDataCommand<RESP_LEN> {
+    type Error = StackError;
+    const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        StackError::ReceiveFailed(error)
     }
 }

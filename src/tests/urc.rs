@@ -8,32 +8,40 @@ use atat::nom::AsBytes;
 use atat::{AtatCmd, AtatUrc, Parser};
 use core::str::FromStr;
 use embedded_nal::SocketAddrV4;
+use heapless::Vec;
 
 #[test]
 fn test_first_parse_no_match() {
     let data = b"+CWJAP:\r\n";
-    assert!(<URCMessages as Parser>::parse(data).is_err());
+    assert!(<URCMessages<32> as Parser>::parse(data).is_err());
 }
 
 #[test]
 fn test_first_parse_incomplete_line() {
-    assert!(<URCMessages as Parser>::parse(b"").is_err());
-    assert!(<URCMessages as Parser>::parse(b"\r\n").is_err());
-    assert!(<URCMessages as Parser>::parse(b"OK").is_err());
-    assert!(<URCMessages as Parser>::parse(b"ready\r").is_err());
-    assert!(<URCMessages as Parser>::parse(b"ready\n").is_err());
-    assert!(<URCMessages as Parser>::parse(b"ready").is_err());
-    assert!(<URCMessages as Parser>::parse(b"+IPD").is_err());
-    assert!(<URCMessages as Parser>::parse(b"\r\n+IPD").is_err());
-    assert!(<URCMessages as Parser>::parse(b"+IPD,5").is_err());
-    assert!(<URCMessages as Parser>::parse(b"+IPD,5,100").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"OK").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"ready\r").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"ready\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"ready").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+IPD").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n+IPD").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+IPD,5").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+IPD,5,100").is_err());
+}
+
+#[test]
+fn test_first_parse_previous_ok() {
+    assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"OK\r\nWIFI GOT IP\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n+CIPRECVDATA,5:abcde").is_err());
 }
 
 #[test]
 fn test_first_parse_too_short() {
-    assert!(<URCMessages as Parser>::parse(b"OK\r\n").is_err());
-    assert!(<URCMessages as Parser>::parse(b"\r\n\r\n\r\nOK\r\n").is_err());
-    assert!(<URCMessages as Parser>::parse(b"\r\n\r\n\r\nOK").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n\r\n\r\nOK\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n\r\n\r\nOK").is_err());
 }
 
 #[test]
@@ -130,6 +138,7 @@ fn test_first_parse_receive_confirmation() {
 fn test_first_parse_send_ok() {
     assert_result(b"SEND OK\r\n", 9, b"SEND OK\r\n");
     assert_result(b"SEND OK\r\n", 15, b"\r\n\r\n\r\nSEND OK\r\n");
+    assert_result(b"SEND OK\r\n", 9, b"SEND OK\r\n+CIPRECVDATA,5:abcde");
 }
 
 #[test]
@@ -146,10 +155,37 @@ fn test_first_parse_data_available() {
 }
 
 #[test]
+fn test_first_parse_data_prefix_incomplete() {
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA,").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,6").is_err());
+}
+
+#[test]
+fn test_first_parse_data_serial_data_incomplete() {
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,5:abcd").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA,5:abcd").is_err());
+}
+
+#[test]
+fn test_first_parse_data_fully_received() {
+    assert_result(b"+CIPRECVDATA,5:abcde", 20, b"+CIPRECVDATA,5:abcde\r\n\r\nOK\r\n");
+    assert_result(
+        b"+CIPRECVDATA,10:abcdefghij",
+        26,
+        b"+CIPRECVDATA,10:abcdefghij\r\n\r\nOK\r\n",
+    );
+    assert_result(b"+CIPRECVDATA,8:abcde\r\nH", 23, b"+CIPRECVDATA,8:abcde\r\nH\r\nOK\r\n");
+    assert_result(b"+CIPRECVDATA,5:abcde", 20, b"+CIPRECVDATA,5:abcde");
+    assert_result(b"+CIPRECVDATA,5:abcde", 24, b"\r\n\r\n+CIPRECVDATA,5:abcde");
+}
+
+#[test]
 fn test_second_parse_ready() {
     assert_eq!(
         URCMessages::Ready,
-        <URCMessages as AtatUrc>::parse(b"ready\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"ready\r\n").unwrap()
     );
 }
 
@@ -157,7 +193,7 @@ fn test_second_parse_ready() {
 fn test_second_parse_wifi_connected() {
     assert_eq!(
         URCMessages::WifiConnected,
-        <URCMessages as AtatUrc>::parse(b"WIFI CONNECTED\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"WIFI CONNECTED\r\n").unwrap()
     );
 }
 
@@ -165,7 +201,7 @@ fn test_second_parse_wifi_connected() {
 fn test_second_parse_wifi_disconnect() {
     assert_eq!(
         URCMessages::WifiDisconnected,
-        <URCMessages as AtatUrc>::parse(b"WIFI DISCONNECT\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"WIFI DISCONNECT\r\n").unwrap()
     );
 }
 
@@ -173,7 +209,7 @@ fn test_second_parse_wifi_disconnect() {
 fn test_second_parse_wifi_ip_assigned() {
     assert_eq!(
         URCMessages::ReceivedIP,
-        <URCMessages as AtatUrc>::parse(b"WIFI GOT IP\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"WIFI GOT IP\r\n").unwrap()
     );
 }
 
@@ -181,7 +217,7 @@ fn test_second_parse_wifi_ip_assigned() {
 fn test_second_parse_wifi_unknown() {
     assert_eq!(
         URCMessages::Unknown,
-        <URCMessages as AtatUrc>::parse(b"WIFI UNDEFINED\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"WIFI UNDEFINED\r\n").unwrap()
     );
 }
 
@@ -189,47 +225,47 @@ fn test_second_parse_wifi_unknown() {
 fn test_second_parse_socket_connected_valid_link_id() {
     assert_eq!(
         URCMessages::SocketConnected(0),
-        <URCMessages as AtatUrc>::parse(b"0,CONNECT\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"0,CONNECT\r\n").unwrap()
     );
 }
 
 #[test]
 fn test_second_parse_socket_connected_invalid_link_id() {
-    assert!(<URCMessages as AtatUrc>::parse(b"5,CONNECT\r\n").is_none())
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"5,CONNECT\r\n").is_none())
 }
 
 #[test]
 fn test_second_parse_socket_closed_valid_link_id() {
     assert_eq!(
         URCMessages::SocketClosed(2),
-        <URCMessages as AtatUrc>::parse(b"2,CLOSED\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"2,CLOSED\r\n").unwrap()
     );
 }
 
 #[test]
 fn test_second_parse_socket_closed_invalid_link_id() {
-    assert!(<URCMessages as AtatUrc>::parse(b"5,CLOSED\r\n").is_none())
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"5,CLOSED\r\n").is_none())
 }
 
 #[test]
 fn test_second_parse_received_bytes_valid_byte_count() {
     assert_eq!(
         URCMessages::ReceivedBytes(124),
-        <URCMessages as AtatUrc>::parse(b"Recv 124 bytes\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"Recv 124 bytes\r\n").unwrap()
     );
 }
 
 #[test]
 fn test_second_parse_received_bytes_valid_invalid_byte_count() {
-    assert!(<URCMessages as AtatUrc>::parse(b"Recv -55 bytes\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"Recv A bytes\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"Recv -55 bytes\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"Recv A bytes\r\n").is_none());
 }
 
 #[test]
 fn test_second_parse_send_ok() {
     assert_eq!(
         URCMessages::SendConfirmation,
-        <URCMessages as AtatUrc>::parse(b"SEND OK\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"SEND OK\r\n").unwrap()
     );
 }
 
@@ -237,7 +273,7 @@ fn test_second_parse_send_ok() {
 fn test_second_parse_send_fail() {
     assert_eq!(
         URCMessages::SendFail,
-        <URCMessages as AtatUrc>::parse(b"SEND FAIL\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"SEND FAIL\r\n").unwrap()
     );
 }
 
@@ -245,29 +281,43 @@ fn test_second_parse_send_fail() {
 fn test_second_parse_data_available_correct() {
     assert_eq!(
         URCMessages::DataAvailable(3, 256),
-        <URCMessages as AtatUrc>::parse(b"+IPD,3,256\r\n").unwrap()
+        <URCMessages<32> as AtatUrc>::parse(b"+IPD,3,256\r\n").unwrap()
     );
 }
 
 #[test]
 fn test_second_parse_data_available_incomplete() {
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3,\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,,200\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,3,\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,,200\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,3\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD\r\n").is_none());
 }
 
 #[test]
 fn test_second_parse_data_available_invalid_numbers() {
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,3,A\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,A,200\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,-1,200\r\n").is_none());
-    assert!(<URCMessages as AtatUrc>::parse(b"+IPD,0,-5\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,3,A\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,A,200\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,-1,200\r\n").is_none());
+    assert!(<URCMessages<32> as AtatUrc>::parse(b"+IPD,0,-5\r\n").is_none());
+}
+
+#[test]
+fn test_second_parse_data() {
+    assert_eq!(
+        URCMessages::<32>::Data(Vec::from_slice(b"abcde").unwrap()),
+        <URCMessages<32> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").unwrap()
+    );
+}
+
+#[test]
+fn test_second_parse_longer_then_block_size() {
+    // Basically this can just happen if ESP-AT sends more data then requested, which is a protocol violation
+    assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").is_none())
 }
 
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {
-    match <URCMessages as Parser>::parse(data) {
+    match <URCMessages<32> as Parser>::parse(data) {
         Ok(result) => {
             assert_eq!(result.0, string);
             assert_eq!(result.1, size);
@@ -281,7 +331,7 @@ fn assert_result(string: &[u8], size: usize, data: &[u8]) {
 /// Asserts that command echo is not matching URC parser
 fn assert_cmd_echo_not_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
     let encoded = command.as_bytes();
-    assert!(<URCMessages as Parser>::parse(encoded.as_bytes()).is_err());
+    assert!(<URCMessages<32> as Parser>::parse(encoded.as_bytes()).is_err());
 }
 
 /// Asserts that a command error response is not matching
@@ -289,5 +339,5 @@ fn assert_cmd_error_not_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: C
     let mut encoded = command.as_bytes().to_vec();
     encoded.extend_from_slice(b"\r\nERROR\r\n");
 
-    assert!(<URCMessages as Parser>::parse(encoded.as_slice()).is_err());
+    assert!(<URCMessages<32> as Parser>::parse(encoded.as_slice()).is_err());
 }

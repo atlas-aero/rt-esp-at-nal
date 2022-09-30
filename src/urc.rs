@@ -1,9 +1,10 @@
 use atat::digest::ParseError;
 use atat::{AtatUrc, Parser};
+use heapless::Vec;
 
 /// URC definitions, needs to passed as generic of [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum URCMessages {
+#[derive(Debug, PartialEq, Eq)]
+pub enum URCMessages<const RX_SIZE: usize> {
     /// Modem is ready for receiving AT commands
     Ready,
     /// WIFi connection state changed to to connected
@@ -25,11 +26,13 @@ pub enum URCMessages {
     /// Data is available in passive receiving mode.
     /// First value = link_id, Second value = available byte count
     DataAvailable(usize, usize),
+    /// Received the following data requested by CIPRECVDATA command.
+    Data(Vec<u8, RX_SIZE>),
     /// Unknown URC message
     Unknown,
 }
 
-impl AtatUrc for URCMessages {
+impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
     type Response = Self;
 
     fn parse(resp: &[u8]) -> Option<Self::Response> {
@@ -37,14 +40,19 @@ impl AtatUrc for URCMessages {
             return URCMessages::parse_data_available(resp);
         }
 
+        if resp.len() > 15 && &resp[..13] == b"+CIPRECVDATA," {
+            let message = DataResponseParser::new(resp).parse().ok()?;
+            return Some(Self::Data(message.to_vec()?));
+        }
+
         match &resp[1..resp.len() - 2] {
-            b",CONNECT" => return Some(Self::SocketConnected(URCMessages::parse_link_id(resp[0])?)),
-            b",CLOSED" => return Some(Self::SocketClosed(URCMessages::parse_link_id(resp[0])?)),
+            b",CONNECT" => return Some(Self::SocketConnected(URCMessages::<8>::parse_link_id(resp[0])?)),
+            b",CLOSED" => return Some(Self::SocketClosed(URCMessages::<8>::parse_link_id(resp[0])?)),
             _ => {}
         }
 
         if &resp[..4] == b"Recv" {
-            return Some(Self::ReceivedBytes(URCMessages::parse_receive_byte_count(resp)?));
+            return Some(Self::ReceivedBytes(URCMessages::<8>::parse_receive_byte_count(resp)?));
         }
 
         match &resp[..resp.len() - 2] {
@@ -59,7 +67,7 @@ impl AtatUrc for URCMessages {
     }
 }
 
-impl URCMessages {
+impl<const RX_SIZE: usize> URCMessages<RX_SIZE> {
     /// Parses the socket id. Currently supports just socket 0-4
     fn parse_link_id(link_id: u8) -> Option<usize> {
         match link_id {
@@ -89,7 +97,7 @@ impl URCMessages {
     /// Parses the +IPD message
     fn parse_data_available(data: &[u8]) -> Option<Self> {
         let string = core::str::from_utf8(&data[..data.len() - 2]).ok()?;
-        let mut parts = string.split(",");
+        let mut parts = string.split(',');
 
         let link_id = parts.nth(1)?.parse().ok()?;
         let length = parts.last()?.parse().ok()?;
@@ -98,13 +106,68 @@ impl URCMessages {
     }
 }
 
-impl Parser for URCMessages {
+impl<const RX_SIZE: usize> Parser for URCMessages<RX_SIZE> {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
         if buf.len() < 6 {
             return Err(ParseError::Incomplete);
         }
 
-        let encoded = core::str::from_utf8(buf).map_err(|_| ParseError::NoMatch)?;
+        if let Some(matcher) = SizeBasedMatcher::matches(buf) {
+            return matcher.handle();
+        }
+
+        LineBasedMatcher::new(buf).handle()
+    }
+}
+
+/// Matches length defined URC message +CIPRECVDATA
+struct SizeBasedMatcher<'a> {
+    buffer: &'a [u8],
+
+    /// First index where the actual message starts
+    start: usize,
+}
+
+impl<'a> SizeBasedMatcher<'a> {
+    /// Returns Self if buffer contains a sized encoded message
+    pub fn matches(buffer: &'a [u8]) -> Option<Self> {
+        if buffer.len() < 15 {
+            return None;
+        }
+
+        let start = buffer.iter().enumerate().find(|x| x.1 != &b'\r' && x.1 != &b'\n')?.0;
+
+        let data = &buffer[start..];
+        if data.len() < 13 || &data[..13] != b"+CIPRECVDATA," {
+            return None;
+        }
+
+        Some(Self { buffer, start })
+    }
+
+    /// Parses the message and checks if data is complete
+    pub fn handle(self) -> Result<(&'a [u8], usize), ParseError> {
+        let data = &self.buffer[self.start..];
+        let message = DataResponseParser::new(data).parse()?;
+
+        let total_length = self.start + 13 + message.length_str.len() + 1 + message.length;
+        Ok((&data[..total_length - self.start], total_length))
+    }
+}
+
+/// Matches regular CRLF terminated URC messages
+struct LineBasedMatcher<'a> {
+    buffer: &'a [u8],
+}
+
+impl<'a> LineBasedMatcher<'a> {
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Self { buffer }
+    }
+
+    /// Handles regular CRLF terminated URC message
+    fn handle(self) -> Result<(&'a [u8], usize), ParseError> {
+        let encoded = core::str::from_utf8(self.buffer).map_err(|_| ParseError::NoMatch)?;
         let mut start = 0;
         let mut end = 0;
 
@@ -123,32 +186,33 @@ impl Parser for URCMessages {
             end += line.len() + 2;
 
             // Line does not end with CRLF
-            if buf.len() < end {
+            if self.buffer.len() < end {
                 break;
             }
 
-            if line == "ready"
-                || &line[..4] == "+IPD"
-                || line == "SEND OK"
-                || line == "SEND FAIL"
-                || &line[..4] == "WIFI"
-                || &line[1..] == ",CONNECT"
-                || &line[1..] == ",CLOSED"
-                || URCMessages::matches_receive_confirmation(line)
-            {
-                return Ok((&buf[start..end], end));
+            if self.matches_lines_based_urc(line) {
+                return Ok((&self.buffer[start..end], end));
             }
-
             break;
         }
 
         Err(ParseError::NoMatch)
     }
-}
 
-impl URCMessages {
+    /// True if a regular CRLF terminated URC message was matched
+    fn matches_lines_based_urc(&self, line: &str) -> bool {
+        line == "ready"
+            || &line[..4] == "+IPD"
+            || line == "SEND OK"
+            || line == "SEND FAIL"
+            || &line[..4] == "WIFI"
+            || &line[1..] == ",CONNECT"
+            || &line[1..] == ",CLOSED"
+            || self.matches_receive_confirmation(line)
+    }
+
     /// Returns true if line is matching a receive confirmation e.g. "Recv 9 bytes"
-    fn matches_receive_confirmation(line: &str) -> bool {
+    fn matches_receive_confirmation(&self, line: &str) -> bool {
         if line.len() < 12 {
             return false;
         }
@@ -159,5 +223,62 @@ impl URCMessages {
 
         let postfix_start = line.len() - 6;
         &line[postfix_start..] != "bytes"
+    }
+}
+
+/// Decodes a +CIPRECVDATA message
+struct DataResponseParser<'a> {
+    buffer: &'a [u8],
+}
+
+impl<'a> DataResponseParser<'a> {
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Self { buffer }
+    }
+
+    /// Parses the length and returns both the usize length + length string
+    pub fn parse(self) -> Result<DataMessage<'a>, ParseError> {
+        let separator = self
+            .buffer
+            .iter()
+            .enumerate()
+            .find(|x| x.1 == &b':')
+            .ok_or(ParseError::Incomplete)?
+            .0;
+        let length_str = core::str::from_utf8(&self.buffer[13..separator]).map_err(|_| ParseError::NoMatch)?;
+        let length_usize = length_str.parse::<usize>().map_err(|_| ParseError::NoMatch)?;
+
+        let remaining_data = &self.buffer[separator + 1..];
+        if remaining_data.len() < length_usize {
+            return Err(ParseError::Incomplete);
+        }
+
+        Ok(DataMessage {
+            length: length_usize,
+            length_str,
+            data: remaining_data,
+        })
+    }
+}
+
+/// Decoded data message
+struct DataMessage<'a> {
+    /// Serial data length
+    pub length: usize,
+
+    /// Serial data length as string
+    pub length_str: &'a str,
+
+    /// All data after separator
+    pub data: &'a [u8],
+}
+
+impl<'a> DataMessage<'a> {
+    /// Copies all serial data to a vector
+    fn to_vec<const LEN: usize>(&self) -> Option<Vec<u8, LEN>> {
+        let mut vec = Vec::new();
+        vec.extend_from_slice(self.data).ok()?;
+
+        Some(vec)
     }
 }

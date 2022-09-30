@@ -15,9 +15,11 @@ use heapless::String;
 
 /// Central client for network communication
 ///
-/// CHUNK_SIZE: Chunk size in bytes when sending data. Higher value results in better performance, but
+/// TX_SIZE: Chunk size in bytes when sending data. Higher value results in better performance, but
 /// introduces also higher stack memory footprint. Max. value: 8192
-pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize> {
+///
+/// RX_SIZE: Chunk size in bytes when receiving data. Value should be matched to buffer size of `receive()` calls.
+pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> {
     /// ATAT client
     pub(crate) client: A,
 
@@ -42,6 +44,9 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
     /// Current socket states, array index = link_id
     pub(crate) sockets: [SocketState; 5],
 
+    /// Data length available to receive which is buffered by ESP-AT. Array index = link_id
+    pub(crate) data_available: [usize; 5],
+
     /// Received byte count confirmed by URC message. Gets reset to NONE by 'send()' method
     pub(crate) recv_byte_count: Option<usize>,
 
@@ -49,6 +54,9 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
     /// False => Data transmission error signaled by URC message
     /// None => Neither an error or confirmed by received by URC message yet
     pub(crate) send_confirmed: Option<bool>,
+
+    /// Received socket data by URC message
+    pub(crate) data: Option<Vec<u8, RX_SIZE>>,
 }
 
 /// Possible errors when joining an access point
@@ -98,8 +106,8 @@ pub struct JoinState {
     pub ip_assigned: bool,
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize>
-    Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
+    Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
     /// Creates a new network adapter. Client needs to be in timeout or blocking mode
     pub fn new(client: A, timer: T) -> Self {
@@ -112,8 +120,10 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             multi_connections_enabled: false,
             passive_mode_enabled: false,
             sockets: [SocketState::Closed; 5],
+            data_available: [0; 5],
             recv_byte_count: None,
             send_confirmed: None,
+            data: None,
         }
     }
 
@@ -150,7 +160,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
 
     /// Checks a single pending URC message. Returns false, if no URC message is pending
     fn handle_single_urc(&mut self) -> bool {
-        match self.client.check_urc::<URCMessages>() {
+        match self.client.check_urc::<URCMessages<RX_SIZE>>() {
             Some(URCMessages::WifiDisconnected) => {
                 self.joined = false;
                 self.ip_assigned = false;
@@ -163,7 +173,12 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
             Some(URCMessages::ReceivedBytes(count)) => self.recv_byte_count = Some(count),
             Some(URCMessages::SendConfirmation) => self.send_confirmed = Some(true),
             Some(URCMessages::SendFail) => self.send_confirmed = Some(false),
-            Some(URCMessages::DataAvailable(_, _)) => {}
+            Some(URCMessages::DataAvailable(link_id, length)) => {
+                if link_id < self.sockets.len() {
+                    self.data_available[link_id] = length;
+                }
+            }
+            Some(URCMessages::Data(data)) => self.data = Some(data),
             Some(URCMessages::Unknown) => {}
             None => return false,
         };

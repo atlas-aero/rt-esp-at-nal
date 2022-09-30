@@ -3,7 +3,7 @@ use crate::tests::mock::{MockAtatClient, MockTimer};
 use alloc::string::ToString;
 use atat::Error;
 
-type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256>;
+type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 64>;
 
 #[test]
 fn test_join_mode_error() {

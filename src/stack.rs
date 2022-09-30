@@ -1,12 +1,13 @@
 use crate::adapter::Adapter;
 use crate::commands::{
-    ConnectCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand, TransmissionCommand,
-    TransmissionPrepareCommand,
+    ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand,
+    TransmissionCommand, TransmissionPrepareCommand,
 };
 use atat::AtatClient;
 use atat::Error as AtError;
 use embedded_nal::{SocketAddr, TcpClientStack};
 use fugit_timer::Timer;
+use heapless::Vec;
 
 /// Unique socket for a network connection
 #[derive(Debug)]
@@ -53,6 +54,9 @@ pub enum Error {
     /// Transmission of data failed
     SendFailed(AtError),
 
+    /// Transmission of data failed
+    ReceiveFailed(AtError),
+
     /// AT-ESP confirmed receiving an unexpected byte count
     PartialSend,
 
@@ -71,6 +75,10 @@ pub enum Error {
     /// Socket was remotely closed and needs to either reconnected to fully closed by calling `close()` for [Adapter]
     ClosingSocket,
 
+    /// Received more data then requested from AT-ESP and data does not fit in (remaining) buffer.
+    /// This indicates either a bug in this crate or in AT-ESP firmware.
+    ReceiveOverflow,
+
     /// Received an unexpected WouldBlock. The most common cause of errors is an incorrect mode of the client.
     /// This must be either timeout or blocking.
     UnexpectedWouldBlock,
@@ -79,8 +87,8 @@ pub enum Error {
     TimerError,
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize> TcpClientStack
-    for Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> TcpClientStack
+    for Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
     type TcpSocket = Socket;
     type Error = Error;
@@ -122,7 +130,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
         self.process_urc_messages();
         self.assert_socket_connected(socket)?;
 
-        for chunk in buffer.chunks(CHUNK_SIZE) {
+        for chunk in buffer.chunks(TX_SIZE) {
             self.send_command(TransmissionPrepareCommand::new(socket.link_id, chunk.len()))?;
             self.send_chunk(chunk)?;
         }
@@ -130,8 +138,25 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
         nb::Result::Ok(buffer.len())
     }
 
-    fn receive(&mut self, _socket: &mut Self::TcpSocket, _buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
-        todo!()
+    fn receive(&mut self, socket: &mut Self::TcpSocket, buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
+        self.process_urc_messages();
+        let mut buffer: Buffer<RX_SIZE> = Buffer::new(buffer);
+
+        while self.data_available[socket.link_id] > 0 && !buffer.is_full() {
+            let command = ReceiveDataCommand::<RX_SIZE>::new(socket.link_id, buffer.get_next_length());
+            self.send_command(command)?;
+            self.process_urc_messages();
+
+            if self.data.is_none() {
+                return nb::Result::Err(nb::Error::Other(Error::ReceiveFailed(AtError::InvalidResponse)));
+            }
+
+            let data = self.data.take().unwrap();
+            self.reduce_data_available(socket.link_id, data.len());
+            buffer.append(data)?;
+        }
+
+        nb::Result::Ok(buffer.len())
     }
 
     fn close(&mut self, _socket: Self::TcpSocket) -> Result<(), Self::Error> {
@@ -139,15 +164,15 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
     }
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: usize>
-    Adapter<A, T, TIMER_HZ, CHUNK_SIZE>
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
+    Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
     /// Sends a chunk of max. 256 bytes
     fn send_chunk(&mut self, data: &[u8]) -> Result<(), Error> {
         self.send_confirmed = None;
         self.recv_byte_count = None;
 
-        self.send_command::<TransmissionCommand<'_>, CHUNK_SIZE>(TransmissionCommand::new(data))?;
+        self.send_command::<TransmissionCommand<'_>, TX_SIZE>(TransmissionCommand::new(data))?;
         self.timer.start(self.send_timeout).map_err(|_| Error::TimerError)?;
 
         while self.send_confirmed.is_none() {
@@ -230,5 +255,72 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const CHUNK_SIZE: u
         }
 
         nb::Result::Ok(())
+    }
+
+    /// Reduces the available data length mark by the given length
+    fn reduce_data_available(&mut self, link_id: usize, length: usize) {
+        if self.data_available[link_id] < length {
+            self.data_available[link_id] = 0;
+            return;
+        }
+
+        self.data_available[link_id] -= length;
+    }
+}
+
+/// Helper for filling receive buffer
+pub(crate) struct Buffer<'a, const CHUNK_SIZE: usize> {
+    buffer: &'a mut [u8],
+
+    /// Next buffer index to start inserting data
+    position: usize,
+}
+
+impl<'a, const CHUNK_SIZE: usize> Buffer<'a, CHUNK_SIZE> {
+    pub fn new(buffer: &'a mut [u8]) -> Self {
+        Self { buffer, position: 0 }
+    }
+
+    /// Returns the length of next chunk based on max. chunk_size and available buffer space
+    pub fn get_next_length(&self) -> usize {
+        let buffer_space = self.buffer_space();
+
+        if buffer_space > CHUNK_SIZE {
+            return CHUNK_SIZE;
+        }
+
+        buffer_space
+    }
+
+    /// Appends the response to the buffer
+    pub fn append(&mut self, data: Vec<u8, CHUNK_SIZE>) -> Result<(), Error> {
+        if data.len() > self.buffer_space() {
+            return Err(Error::ReceiveOverflow);
+        }
+
+        let end = self.position + data.len();
+
+        self.buffer[self.position..end].copy_from_slice(data.as_slice());
+        self.position = end;
+        Ok(())
+    }
+
+    /// Returns true if the buffer is completely filled
+    pub fn is_full(&self) -> bool {
+        if self.buffer.is_empty() {
+            return true;
+        }
+
+        self.position >= self.buffer.len()
+    }
+
+    /// Returns the remaining free buffer space
+    fn buffer_space(&self) -> usize {
+        self.buffer.len() - self.position
+    }
+
+    /// Returns the current fill length
+    pub(crate) fn len(&self) -> usize {
+        self.position
     }
 }
