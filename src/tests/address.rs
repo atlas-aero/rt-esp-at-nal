@@ -1,4 +1,4 @@
-use crate::adapter::{Adapter, AddressErrors};
+use crate::wifi::{Adapter, AddressErrors};
 use crate::tests::mock::{MockAtatClient, MockTimer};
 use alloc::string::ToString;
 use atat::Error as AtError;

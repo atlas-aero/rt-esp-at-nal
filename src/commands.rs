@@ -1,4 +1,4 @@
-use crate::adapter::{AddressErrors, JoinError};
+use crate::wifi::{AddressErrors, JoinError};
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;

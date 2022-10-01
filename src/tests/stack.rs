@@ -1,4 +1,4 @@
-use crate::adapter::Adapter;
+use crate::wifi::Adapter;
 use crate::stack::{Error, Socket};
 use crate::tests::mock::{MockAtatClient, MockTimer};
 use alloc::string::{String, ToString};

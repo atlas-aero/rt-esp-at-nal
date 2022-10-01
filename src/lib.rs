@@ -3,7 +3,7 @@
 
 extern crate alloc;
 
-pub mod adapter;
+pub mod wifi;
 pub(crate) mod commands;
 pub(crate) mod responses;
 pub mod stack;

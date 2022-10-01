@@ -1,4 +1,4 @@
-use crate::adapter::{Adapter, JoinError};
+use crate::wifi::{Adapter, JoinError};
 use crate::tests::mock::{MockAtatClient, MockTimer};
 use alloc::string::ToString;
 use atat::Error;

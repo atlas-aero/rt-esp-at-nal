@@ -1,4 +1,4 @@
-use crate::adapter::Adapter;
+use crate::wifi::Adapter;
 use crate::commands::{
     CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
