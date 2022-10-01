@@ -1008,6 +1008,49 @@ fn test_closed_socket_closed_successfully() {
     assert_eq!("AT+CIPCLOSE=0\r\n".to_string(), commands[0]);
 }
 
+#[test]
+fn test_is_connected_open() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+
+    assert!(!adapter.is_connected(&socket).unwrap());
+}
+
+#[test]
+fn test_is_connected_true() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+
+    adapter.client.add_urc_first_socket_connected();
+
+    assert!(adapter.is_connected(&socket).unwrap());
+}
+
+#[test]
+fn test_is_connected_closing() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+
+    adapter.client.add_urc_first_socket_closed();
+
+    assert!(!adapter.is_connected(&socket).unwrap());
+}
+
 /// Helper for opening & connecting a socket
 fn connect_socket(adapter: &mut AdapterType) -> Socket {
     // Receiving socket

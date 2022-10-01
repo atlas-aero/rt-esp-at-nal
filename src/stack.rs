@@ -96,11 +96,20 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     type TcpSocket = Socket;
     type Error = Error;
 
+    /// Opens and returns a new socket
+    /// Currently only five parallel sockets are supported. If not socket is available [Error::NoSocketAvailable] is returned.
+    ///
+    /// On first call ESP-AT is configured to support multiple connections.
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
         self.enable_multiple_connections()?;
         self.open_socket()
     }
 
+    /// Opens a new TCP connection. Both IPv4 and IPv6 are supported.
+    /// Returns [Error::AlreadyConnected] if socket is already connected.
+    ///
+    /// On first call ESP-AT is configured for passive socket receiving mode. So receiving data
+    /// is buffered on ESP-AT to a maximum size of around 8192 bytes.
     fn connect(&mut self, socket: &mut Socket, remote: SocketAddr) -> nb::Result<(), Self::Error> {
         self.process_urc_messages();
 
@@ -125,10 +134,15 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         nb::Result::Ok(())
     }
 
-    fn is_connected(&mut self, _socket: &Self::TcpSocket) -> Result<bool, Self::Error> {
-        todo!()
+    /// Returns true if the socket is currently connected. Connection aborts by the remote side are also taken into account.
+    /// The current implementation never returns a Error.
+    fn is_connected(&mut self, socket: &Self::TcpSocket) -> Result<bool, Self::Error> {
+        self.process_urc_messages();
+        Ok(self.sockets[socket.link_id] == SocketState::Connected)
     }
 
+    /// Sends the given buffer and returns the length (in bytes) sent.
+    /// The data is divided into smaller blocks. The block size is determined by the generic constant TX_SIZE.
     fn send(&mut self, socket: &mut Socket, buffer: &[u8]) -> nb::Result<usize, Error> {
         self.process_urc_messages();
         self.assert_socket_connected(socket)?;
@@ -141,6 +155,10 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         nb::Result::Ok(buffer.len())
     }
 
+    /// Receives data (if available) and writes it to the given buffer.
+    ///
+    /// The data is read internally in blocks. The block size is defined by the generic constant RX_SIZE.
+    /// In any case, data is read until the buffer is completely filled or no further data is available.
     fn receive(&mut self, socket: &mut Self::TcpSocket, buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
         self.process_urc_messages();
         let mut buffer: Buffer<RX_SIZE> = Buffer::new(buffer);
@@ -162,6 +180,11 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         nb::Result::Ok(buffer.len())
     }
 
+    /// Closes a socket
+    ///
+    /// If the socket has already been closed by the remote side or is not connected, no command
+    /// is sent to the ESP-AT but only the internal status is set.
+    /// In case of an error (which is returned) the socket is internally set to closed so that it is not lost and can be reused.
     fn close(&mut self, socket: Self::TcpSocket) -> Result<(), Self::Error> {
         self.process_urc_messages();
 
