@@ -1,7 +1,7 @@
 use crate::adapter::Adapter;
 use crate::commands::{
-    ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand, SetSocketReceivingModeCommand,
-    TransmissionCommand, TransmissionPrepareCommand,
+    CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
+    SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
 };
 use atat::AtatClient;
 use atat::Error as AtError;
@@ -57,11 +57,14 @@ pub enum Error {
     /// Transmission of data failed
     ReceiveFailed(AtError),
 
+    /// Socket close command failed
+    CloseError(AtError),
+
     /// AT-ESP confirmed receiving an unexpected byte count
     PartialSend,
 
-    /// TCP connect command was responded by by OK. But connect was not confirmed by URC message.
-    ConnectUnconfirmed,
+    /// TCP connect or close command was responded by by OK. But connect or close was not confirmed by URC message.
+    UnconfirmedSocketState,
 
     /// No socket available, since the maximum number is in use.
     NoSocketAvailable,
@@ -116,7 +119,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         self.process_urc_messages();
 
         if self.sockets[socket.link_id] != SocketState::Connected {
-            return nb::Result::Err(nb::Error::Other(Error::ConnectUnconfirmed));
+            return nb::Result::Err(nb::Error::Other(Error::UnconfirmedSocketState));
         }
 
         nb::Result::Ok(())
@@ -159,8 +162,27 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         nb::Result::Ok(buffer.len())
     }
 
-    fn close(&mut self, _socket: Self::TcpSocket) -> Result<(), Self::Error> {
-        todo!()
+    fn close(&mut self, socket: Self::TcpSocket) -> Result<(), Self::Error> {
+        self.process_urc_messages();
+
+        // Socket is not connected yet or was already closed remotely
+        if self.sockets[socket.link_id] == SocketState::Closing || self.sockets[socket.link_id] == SocketState::Open {
+            self.sockets[socket.link_id] = SocketState::Closed;
+            return Ok(());
+        }
+
+        let mut result = self.send_command(CloseSocketCommand::new(socket.link_id));
+        self.process_urc_messages();
+
+        if self.sockets[socket.link_id] != SocketState::Closing && result.is_ok() {
+            result = Err(Error::UnconfirmedSocketState);
+        }
+
+        // Setting to Closed even on error. Otherwise socket can not be reused in future, as its consumed.
+        self.sockets[socket.link_id] = SocketState::Closed;
+
+        result?;
+        Ok(())
     }
 }
 

@@ -4,7 +4,6 @@ use crate::commands::{
 };
 use crate::urc::URCMessages;
 use atat::heapless::String;
-use atat::nom::AsBytes;
 use atat::{AtatCmd, AtatUrc, Parser};
 use core::str::FromStr;
 use embedded_nal::SocketAddrV4;
@@ -90,40 +89,6 @@ fn test_first_parse_connection_closed() {
     assert_result(b"0,CLOSED\r\n", 10, b"0,CLOSED\r\nNEXT LINE\r\n");
     assert_result(b"0,CLOSED\r\n", 12, b"\r\n0,CLOSED\r\n");
     assert_result(b"0,CLOSED\r\n", 14, b"\r\n\r\n0,CLOSED\r\n");
-}
-
-#[test]
-fn test_first_parse_not_matching_cmd_echo() {
-    assert_cmd_echo_not_matching(WifiModeCommand::station_mode());
-    assert_cmd_echo_not_matching(SetSocketReceivingModeCommand::passive_mode());
-    assert_cmd_echo_not_matching(SetMultipleConnectionsCommand::multiple());
-    assert_cmd_echo_not_matching(AccessPointConnectCommand::new(
-        String::from_str("test_network").unwrap(),
-        String::from_str("secret").unwrap(),
-    ));
-    assert_cmd_echo_not_matching(TransmissionPrepareCommand::new(0, 8));
-    assert_cmd_echo_not_matching(ConnectCommand::tcp_v4(
-        0,
-        SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
-    ));
-    assert_cmd_echo_not_matching(ObtainLocalAddressCommand::new());
-}
-
-#[test]
-fn test_first_parse_not_matching_cmd_error() {
-    assert_cmd_error_not_matching(WifiModeCommand::station_mode());
-    assert_cmd_error_not_matching(SetSocketReceivingModeCommand::passive_mode());
-    assert_cmd_error_not_matching(SetMultipleConnectionsCommand::multiple());
-    assert_cmd_error_not_matching(AccessPointConnectCommand::new(
-        String::from_str("test_network").unwrap(),
-        String::from_str("secret").unwrap(),
-    ));
-    assert_cmd_error_not_matching(TransmissionPrepareCommand::new(0, 8));
-    assert_cmd_error_not_matching(ConnectCommand::tcp_v4(
-        0,
-        SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
-    ));
-    assert_cmd_error_not_matching(ObtainLocalAddressCommand::new());
 }
 
 #[test]
@@ -316,6 +281,23 @@ fn test_second_parse_longer_then_block_size() {
     assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").is_none())
 }
 
+#[test]
+fn test_matching_cmd_echo() {
+    assert_cmd_echo_matching(WifiModeCommand::station_mode());
+    assert_cmd_echo_matching(SetSocketReceivingModeCommand::passive_mode());
+    assert_cmd_echo_matching(SetMultipleConnectionsCommand::multiple());
+    assert_cmd_echo_matching(AccessPointConnectCommand::new(
+        String::from_str("test_network").unwrap(),
+        String::from_str("secret").unwrap(),
+    ));
+    assert_cmd_echo_matching(TransmissionPrepareCommand::new(0, 8));
+    assert_cmd_echo_matching(ConnectCommand::tcp_v4(
+        0,
+        SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
+    ));
+    assert_cmd_echo_matching(ObtainLocalAddressCommand::new());
+}
+
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {
     match <URCMessages<32> as Parser>::parse(data) {
         Ok(result) => {
@@ -328,16 +310,17 @@ fn assert_result(string: &[u8], size: usize, data: &[u8]) {
     }
 }
 
-/// Asserts that command echo is not matching URC parser
-fn assert_cmd_echo_not_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
+/// Asserts that command echo is matched
+fn assert_cmd_echo_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
     let encoded = command.as_bytes();
-    assert!(<URCMessages<32> as Parser>::parse(encoded.as_bytes()).is_err());
-}
 
-/// Asserts that a command error response is not matching
-fn assert_cmd_error_not_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
-    let mut encoded = command.as_bytes().to_vec();
-    encoded.extend_from_slice(b"\r\nERROR\r\n");
+    // Assert that first parser ist matching
+    assert_result(encoded.as_slice(), encoded.len(), encoded.as_slice());
 
-    assert!(<URCMessages<32> as Parser>::parse(encoded.as_slice()).is_err());
+    // Assert that echo gets converted to Unknown URC
+    assert!(
+        <URCMessages<32> as AtatUrc>::parse(encoded.as_slice()).is_none(),
+        "Echo of command {} did not return None on second parser.",
+        core::str::from_utf8(encoded.as_slice()).unwrap()
+    );
 }

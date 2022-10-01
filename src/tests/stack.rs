@@ -361,7 +361,7 @@ fn test_connect_unconfirmed() {
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:6000").unwrap())
         .unwrap_err();
 
-    assert_eq!(nb::Error::Other(Error::ConnectUnconfirmed), error);
+    assert_eq!(nb::Error::Other(Error::UnconfirmedSocketState), error);
 }
 
 #[test]
@@ -888,6 +888,124 @@ fn test_receive_data_received_buffer_overflow() {
     let mut buffer = [b' '; 5];
     let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
     assert_eq!(nb::Error::Other(Error::ReceiveOverflow), error);
+}
+
+#[test]
+fn test_closed_socket_not_connected_yet() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    adapter.client.reset_captured_commands();
+    adapter.close(socket).unwrap();
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    // Asserts that no close command is sent
+    let commands = adapter.client.get_commands_as_strings();
+    assert!(commands.is_empty());
+}
+
+#[test]
+fn test_closed_socket_already_closed_by_remote() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_first_socket_closed();
+    adapter.client.reset_captured_commands();
+
+    adapter.close(socket).unwrap();
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    // Asserts that no close command is sent
+    let commands = adapter.client.get_commands_as_strings();
+    assert!(commands.is_empty());
+}
+
+#[test]
+fn test_closed_socket_command_error() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    adapter.client.add_error_response();
+    let error = adapter.close(socket).unwrap_err();
+    assert_eq!(Error::CloseError(AtError::Parse), error);
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+}
+
+#[test]
+fn test_closed_socket_command_would_block() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    adapter.client.send_would_block(0);
+    let error = adapter.close(socket).unwrap_err();
+    assert_eq!(Error::UnexpectedWouldBlock, error);
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+}
+
+#[test]
+fn test_closed_socket_unconfirmed() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    adapter.client.add_ok_response();
+    let error = adapter.close(socket).unwrap_err();
+    assert_eq!(Error::UnconfirmedSocketState, error);
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+}
+
+#[test]
+fn test_closed_socket_closed_successfully() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    adapter.client.reset_captured_commands();
+    adapter.client.throttle_urc();
+
+    // Dummy URC for first URC check call
+    adapter.client.add_urc_wifi_got_ip();
+
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_first_socket_closed();
+    adapter.close(socket).unwrap();
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(1, commands.len());
+    assert_eq!("AT+CIPCLOSE=0\r\n".to_string(), commands[0]);
 }
 
 /// Helper for opening & connecting a socket

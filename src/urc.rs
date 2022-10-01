@@ -36,6 +36,11 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
     type Response = Self;
 
     fn parse(resp: &[u8]) -> Option<Self::Response> {
+        // Command echo
+        if &resp[..3] == b"AT+" {
+            return None;
+        }
+
         if &resp[..4] == b"+IPD" {
             return URCMessages::parse_data_available(resp);
         }
@@ -202,6 +207,7 @@ impl<'a> LineBasedMatcher<'a> {
     /// True if a regular CRLF terminated URC message was matched
     fn matches_lines_based_urc(&self, line: &str) -> bool {
         line == "ready"
+            || &line[..3] == "AT+"
             || &line[..4] == "+IPD"
             || line == "SEND OK"
             || line == "SEND FAIL"

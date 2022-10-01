@@ -152,38 +152,37 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
     /// Processes all pending messages in the queue
     pub fn process_urc_messages(&mut self) {
-        while self.handle_single_urc() {}
+        while let Some(message) = self.client.check_urc::<URCMessages<RX_SIZE>>() {
+            self.handle_urc(message)
+        }
 
         // Avoid full response queue, which gets full for a unknown reason
         let _ = self.client.check_response(&SetSocketReceivingModeCommand::passive_mode());
     }
 
-    /// Checks a single pending URC message. Returns false, if no URC message is pending
-    fn handle_single_urc(&mut self) -> bool {
-        match self.client.check_urc::<URCMessages<RX_SIZE>>() {
-            Some(URCMessages::WifiDisconnected) => {
+    /// Handles a single URC message
+    pub(crate) fn handle_urc(&mut self, message: URCMessages<RX_SIZE>) {
+        match message {
+            URCMessages::WifiDisconnected => {
                 self.joined = false;
                 self.ip_assigned = false;
             }
-            Some(URCMessages::ReceivedIP) => self.ip_assigned = true,
-            Some(URCMessages::WifiConnected) => self.joined = true,
-            Some(URCMessages::Ready) => {}
-            Some(URCMessages::SocketConnected(link_id)) => self.sockets[link_id] = SocketState::Connected,
-            Some(URCMessages::SocketClosed(link_id)) => self.sockets[link_id] = SocketState::Closing,
-            Some(URCMessages::ReceivedBytes(count)) => self.recv_byte_count = Some(count),
-            Some(URCMessages::SendConfirmation) => self.send_confirmed = Some(true),
-            Some(URCMessages::SendFail) => self.send_confirmed = Some(false),
-            Some(URCMessages::DataAvailable(link_id, length)) => {
+            URCMessages::ReceivedIP => self.ip_assigned = true,
+            URCMessages::WifiConnected => self.joined = true,
+            URCMessages::Ready => {}
+            URCMessages::SocketConnected(link_id) => self.sockets[link_id] = SocketState::Connected,
+            URCMessages::SocketClosed(link_id) => self.sockets[link_id] = SocketState::Closing,
+            URCMessages::ReceivedBytes(count) => self.recv_byte_count = Some(count),
+            URCMessages::SendConfirmation => self.send_confirmed = Some(true),
+            URCMessages::SendFail => self.send_confirmed = Some(false),
+            URCMessages::DataAvailable(link_id, length) => {
                 if link_id < self.sockets.len() {
                     self.data_available[link_id] = length;
                 }
             }
-            Some(URCMessages::Data(data)) => self.data = Some(data),
-            Some(URCMessages::Unknown) => {}
-            None => return false,
-        };
-
-        true
+            URCMessages::Data(data) => self.data = Some(data),
+            URCMessages::Unknown => {}
+        }
     }
 
     /// Sends the command for switching to station mode

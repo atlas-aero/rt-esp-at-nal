@@ -233,6 +233,11 @@ impl MockAtatClient {
     pub fn get_reset_call_count(&self) -> usize {
         self.reset_call_count
     }
+
+    /// Resets the the captured sent commands
+    pub fn reset_captured_commands(&mut self) {
+        self.commands.clear();
+    }
 }
 
 mock! {

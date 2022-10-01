@@ -279,3 +279,26 @@ impl<const RESP_LEN: usize> CommandErrorHandler for ReceiveDataCommand<RESP_LEN>
         StackError::ReceiveFailed(error)
     }
 }
+
+/// Command for receiving data
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CIPCLOSE", NoResponse, timeout_ms = 1_000)]
+pub struct CloseSocketCommand {
+    /// Socket ID
+    link_id: usize,
+}
+
+impl CloseSocketCommand {
+    pub fn new(link_id: usize) -> Self {
+        Self { link_id }
+    }
+}
+
+impl CommandErrorHandler for CloseSocketCommand {
+    type Error = StackError;
+    const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        StackError::CloseError(error)
+    }
+}
