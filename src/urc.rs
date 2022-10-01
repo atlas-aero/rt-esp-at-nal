@@ -28,6 +28,8 @@ pub enum URCMessages<const RX_SIZE: usize> {
     DataAvailable(usize, usize),
     /// Received the following data requested by CIPRECVDATA command.
     Data(Vec<u8, RX_SIZE>),
+    /// Echo of a command
+    Echo,
     /// Unknown URC message
     Unknown,
 }
@@ -38,7 +40,7 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
     fn parse(resp: &[u8]) -> Option<Self::Response> {
         // Command echo
         if &resp[..3] == b"AT+" {
-            return None;
+            return Some(Self::Echo);
         }
 
         if &resp[..4] == b"+IPD" {

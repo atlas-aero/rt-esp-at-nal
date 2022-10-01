@@ -318,9 +318,10 @@ fn assert_cmd_echo_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
     assert_result(encoded.as_slice(), encoded.len(), encoded.as_slice());
 
     // Assert that echo gets converted to Unknown URC
-    assert!(
-        <URCMessages<32> as AtatUrc>::parse(encoded.as_slice()).is_none(),
-        "Echo of command {} did not return None on second parser.",
+    assert_eq!(
+        URCMessages::Echo,
+        <URCMessages<32> as AtatUrc>::parse(encoded.as_slice()).unwrap(),
+        "Echo of command {} did not return URCMessages::Echo on second parser.",
         core::str::from_utf8(encoded.as_slice()).unwrap()
     );
 }

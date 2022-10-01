@@ -181,6 +181,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
                 }
             }
             URCMessages::Data(data) => self.data = Some(data),
+            URCMessages::Echo => {}
             URCMessages::Unknown => {}
         }
     }
