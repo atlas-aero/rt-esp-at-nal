@@ -1,8 +1,8 @@
-use crate::wifi::{Adapter, AddressErrors};
 use crate::tests::mock::{MockAtatClient, MockTimer};
+use crate::wifi::WifiAdapter;
+use crate::wifi::{Adapter, AddressErrors};
 use alloc::string::ToString;
 use atat::Error as AtError;
-
 type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 64>;
 
 #[test]

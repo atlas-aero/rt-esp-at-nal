@@ -1,8 +1,8 @@
-use crate::wifi::Adapter;
 use crate::commands::{
     CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
 };
+use crate::wifi::Adapter;
 use atat::AtatClient;
 use atat::Error as AtError;
 use embedded_nal::{SocketAddr, TcpClientStack};

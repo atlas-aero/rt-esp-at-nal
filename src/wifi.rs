@@ -13,6 +13,21 @@ use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
 use heapless::String;
 
+/// Wifi network adapter trait
+pub trait WifiAdapter {
+    /// Error when joining a WIFI network
+    type JoinError;
+
+    /// Error when receiving local address information
+    type AddressError;
+
+    /// Connects to an WIFI access point and returns the connection state
+    fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, Self::JoinError>;
+
+    /// Returns local address information
+    fn get_address(&mut self) -> Result<LocalAddress, Self::AddressError>;
+}
+
 /// Central client for network communication
 ///
 /// TX_SIZE: Chunk size in bytes when sending data. Higher value results in better performance, but
@@ -106,6 +121,36 @@ pub struct JoinState {
     pub ip_assigned: bool,
 }
 
+impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> WifiAdapter
+    for Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
+{
+    type JoinError = JoinError;
+    type AddressError = AddressErrors;
+
+    /// Connects to an WIFI access point and returns the connection state
+    ///
+    /// Note:
+    /// If the connection was not successful or is lost, the ESP-AT will try independently fro time
+    /// to time (by default every second) to establish connection to the network. The status can be
+    /// queried using `get_join_state()`.
+    fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, JoinError> {
+        self.set_station_mode()?;
+        self.connect_access_point(ssid, key)?;
+        self.process_urc_messages();
+
+        Ok(JoinState {
+            connected: self.joined,
+            ip_assigned: self.ip_assigned,
+        })
+    }
+
+    /// Returns local address information
+    fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
+        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
+        LocalAddress::from_responses(responses)
+    }
+}
+
 impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
     Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
@@ -127,31 +172,8 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         }
     }
 
-    /// Connects to an WIFI access point and returns the connection state
-    ///
-    /// Note:
-    /// If the connection was not successful or is lost, the ESP-AT will try independently fro time
-    /// to time (by default every second) to establish connection to the network. The status can be
-    /// queried using `get_join_state()`.
-    pub fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, JoinError> {
-        self.set_station_mode()?;
-        self.connect_access_point(ssid, key)?;
-        self.process_urc_messages();
-
-        Ok(JoinState {
-            connected: self.joined,
-            ip_assigned: self.ip_assigned,
-        })
-    }
-
-    /// Returns local address information
-    pub fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
-        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
-        LocalAddress::from_responses(responses)
-    }
-
     /// Processes all pending messages in the queue
-    pub fn process_urc_messages(&mut self) {
+    pub(crate) fn process_urc_messages(&mut self) {
         while let Some(message) = self.client.check_urc::<URCMessages<RX_SIZE>>() {
             self.handle_urc(message)
         }

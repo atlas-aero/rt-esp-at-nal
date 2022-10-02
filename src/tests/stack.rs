@@ -1,6 +1,6 @@
-use crate::wifi::Adapter;
 use crate::stack::{Error, Socket};
 use crate::tests::mock::{MockAtatClient, MockTimer};
+use crate::wifi::Adapter;
 use alloc::string::{String, ToString};
 use alloc::vec;
 use atat::Error as AtError;

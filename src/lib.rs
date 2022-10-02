@@ -3,11 +3,11 @@
 
 extern crate alloc;
 
-pub mod wifi;
 pub(crate) mod commands;
 pub(crate) mod responses;
 pub mod stack;
 pub mod urc;
+pub mod wifi;
 
 #[cfg(test)]
 mod tests;

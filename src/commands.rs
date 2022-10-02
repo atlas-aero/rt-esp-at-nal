@@ -1,7 +1,7 @@
-use crate::wifi::{AddressErrors, JoinError};
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
+use crate::wifi::{AddressErrors, JoinError};
 use alloc::string::ToString;
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
