@@ -24,6 +24,9 @@ pub trait WifiAdapter {
     /// Connects to an WIFI access point and returns the connection state
     fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, Self::JoinError>;
 
+    /// Returns the current WIFI connection status
+    fn get_join_status(&mut self) -> JoinState;
+
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, Self::AddressError>;
 }
@@ -142,6 +145,14 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             connected: self.joined,
             ip_assigned: self.ip_assigned,
         })
+    }
+    /// Returns the current WIFI connection status
+    fn get_join_status(&mut self) -> JoinState {
+        self.process_urc_messages();
+        JoinState {
+            connected: self.joined,
+            ip_assigned: self.ip_assigned,
+        }
     }
 
     /// Returns local address information

@@ -164,3 +164,46 @@ fn test_join_wifi_no_urc_messages() {
     assert!(!result.connected);
     assert!(!result.ip_assigned);
 }
+
+#[test]
+fn test_get_join_state_disconnected() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+    // Simulate that network was connected once
+    client.add_urc_wifi_connected();
+    client.add_urc_wifi_got_ip();
+
+    client.add_urc_wifi_disconnect();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let result = adapter.get_join_status();
+    assert!(!result.connected);
+    assert!(!result.ip_assigned);
+}
+
+#[test]
+fn test_get_join_state_connected_and_ip_assigned() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+    client.add_urc_wifi_connected();
+    client.add_urc_wifi_got_ip();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let result = adapter.get_join_status();
+    assert!(result.connected);
+    assert!(result.ip_assigned);
+}
+
+#[test]
+fn test_get_join_state_connected_without_ip() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+    client.add_urc_wifi_connected();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let result = adapter.get_join_status();
+    assert!(result.connected);
+    assert!(!result.ip_assigned);
+}
