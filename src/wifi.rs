@@ -7,6 +7,7 @@ use crate::stack::SocketState;
 use crate::urc::URCMessages;
 use atat::heapless::Vec;
 use atat::{AtatClient, AtatCmd, Error as AtError};
+use core::fmt::Debug;
 use core::str::FromStr;
 use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
@@ -16,10 +17,10 @@ use heapless::String;
 /// Wifi network adapter trait
 pub trait WifiAdapter {
     /// Error when joining a WIFI network
-    type JoinError;
+    type JoinError: Debug;
 
     /// Error when receiving local address information
-    type AddressError;
+    type AddressError: Debug;
 
     /// Connects to an WIFI access point and returns the connection state
     fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, Self::JoinError>;
