@@ -74,6 +74,9 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
     /// None => Neither an error or confirmed by received by URC message yet
     pub(crate) send_confirmed: Option<bool>,
 
+    /// A URC message signaling that the given socket is already connected
+    pub(crate) already_connected: bool,
+
     /// Received socket data by URC message
     pub(crate) data: Option<Vec<u8, RX_SIZE>>,
 }
@@ -180,6 +183,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             data_available: [0; 5],
             recv_byte_count: None,
             send_confirmed: None,
+            already_connected: false,
             data: None,
         }
     }
@@ -206,6 +210,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             URCMessages::Ready => {}
             URCMessages::SocketConnected(link_id) => self.sockets[link_id] = SocketState::Connected,
             URCMessages::SocketClosed(link_id) => self.sockets[link_id] = SocketState::Closing,
+            URCMessages::AlreadyConnected => self.already_connected = true,
             URCMessages::ReceivedBytes(count) => self.recv_byte_count = Some(count),
             URCMessages::SendConfirmation => self.send_confirmed = Some(true),
             URCMessages::SendFail => self.send_confirmed = Some(false),

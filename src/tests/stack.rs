@@ -100,6 +100,29 @@ fn test_connect_already_connected_by_urc() {
 }
 
 #[test]
+fn test_connect_already_connected_by_response() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+
+    // Multiple connections command
+    client.add_ok_response();
+    // Receiving mode command
+    client.add_ok_response();
+    // Connect command
+    client.add_error_response();
+
+    client.skip_urc(1);
+    client.add_urc_message(b"ALREADY CONNECTED\r\n");
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let mut socket = adapter.socket().unwrap();
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+}
+
+#[test]
 fn test_connect_correct_commands_ipv4() {
     let timer = MockTimer::new();
     let mut client = MockAtatClient::new();

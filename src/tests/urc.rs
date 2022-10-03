@@ -92,6 +92,12 @@ fn test_first_parse_connection_closed() {
 }
 
 #[test]
+fn test_first_parse_already_connected() {
+    assert_result(b"ALREADY CONNECTED\r\n", 19, b"ALREADY CONNECTED\r\n\r\n");
+    assert_result(b"ALREADY CONNECTED\r\n", 21, b"\r\nALREADY CONNECTED\r\n\r\n");
+}
+
+#[test]
 fn test_first_parse_receive_confirmation() {
     assert_result(b"Recv 9 bytes\r\n", 14, b"Recv 9 bytes\r\n");
     assert_result(b"Recv 9 bytes\r\n", 16, b"\r\nRecv 9 bytes\r\n");
@@ -210,6 +216,14 @@ fn test_second_parse_socket_closed_valid_link_id() {
 #[test]
 fn test_second_parse_socket_closed_invalid_link_id() {
     assert!(<URCMessages<32> as AtatUrc>::parse(b"5,CLOSED\r\n").is_none())
+}
+
+#[test]
+fn test_second_parse_already_connected() {
+    assert_eq!(
+        URCMessages::AlreadyConnected,
+        <URCMessages<32> as AtatUrc>::parse(b"ALREADY CONNECTED\r\n").unwrap()
+    );
 }
 
 #[test]

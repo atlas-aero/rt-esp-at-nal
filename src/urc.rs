@@ -19,6 +19,8 @@ pub enum URCMessages<const RX_SIZE: usize> {
     SocketClosed(usize),
     /// Confirmation that the given number of bytes have been received by ESP-AT
     ReceivedBytes(usize),
+    /// Signals that socket is already connected when trying to establish the same connection again
+    AlreadyConnected,
     /// Transmission of socket data was successful
     SendConfirmation,
     /// Transmission of socket data failed
@@ -69,6 +71,7 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
             b"WIFI CONNECTED" => Some(Self::WifiConnected),
             b"WIFI DISCONNECT" => Some(Self::WifiDisconnected),
             b"WIFI GOT IP" => Some(Self::ReceivedIP),
+            b"ALREADY CONNECTED" => Some(Self::AlreadyConnected),
             _ => Some(Self::Unknown),
         }
     }
@@ -216,6 +219,7 @@ impl<'a> LineBasedMatcher<'a> {
             || &line[..4] == "WIFI"
             || &line[1..] == ",CONNECT"
             || &line[1..] == ",CLOSED"
+            || line == "ALREADY CONNECTED"
             || self.matches_receive_confirmation(line)
     }
 

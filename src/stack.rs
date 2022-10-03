@@ -118,14 +118,21 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         }
 
         self.enable_passive_receiving_mode()?;
+        self.already_connected = false;
 
         let command = match remote {
             SocketAddr::V4(address) => ConnectCommand::tcp_v4(socket.link_id, address),
             SocketAddr::V6(address) => ConnectCommand::tcp_v6(socket.link_id, address),
         };
-
-        self.send_command(command)?;
+        let result = self.send_command(command);
         self.process_urc_messages();
+
+        // ESP-AT returned that given socket is already connected. This indicates that a URC Connect message was missed.
+        if self.already_connected {
+            self.sockets[socket.link_id] = SocketState::Connected;
+            return nb::Result::Ok(());
+        }
+        result?;
 
         if self.sockets[socket.link_id] != SocketState::Connected {
             return nb::Result::Err(nb::Error::Other(Error::UnconfirmedSocketState));
