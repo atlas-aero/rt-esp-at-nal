@@ -693,10 +693,10 @@ fn test_receive_no_data_available() {
     adapter.client.add_urc_message(b"+IPD,3,256\r\n");
 
     let mut buffer = [0x0; 32];
-    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
 
-    assert_eq!(0, length);
     assert_eq!([0x0; 32], buffer);
+    assert_eq!(nb::Error::WouldBlock, error);
 }
 
 #[test]

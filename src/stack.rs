@@ -161,6 +161,11 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     /// In any case, data is read until the buffer is completely filled or no further data is available.
     fn receive(&mut self, socket: &mut Self::TcpSocket, buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
         self.process_urc_messages();
+
+        if self.data_available[socket.link_id] == 0 {
+            return nb::Result::Err(nb::Error::WouldBlock);
+        }
+
         let mut buffer: Buffer<RX_SIZE> = Buffer::new(buffer);
 
         while self.data_available[socket.link_id] > 0 && !buffer.is_full() {
