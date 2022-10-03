@@ -120,6 +120,8 @@ fn test_connect_already_connected_by_response() {
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();
+
+    assert!(adapter.is_connected(&socket).unwrap());
 }
 
 #[test]
@@ -385,6 +387,55 @@ fn test_connect_unconfirmed() {
         .unwrap_err();
 
     assert_eq!(nb::Error::Other(Error::UnconfirmedSocketState), error);
+}
+
+#[test]
+fn test_connect_available_data_reset() {
+    let timer = MockTimer::new();
+    let mut client = MockAtatClient::new();
+
+    // Multiple connections command
+    client.add_ok_response();
+    // Receiving mode command
+    client.add_ok_response();
+    // Connect command
+    client.add_ok_response();
+
+    client.skip_urc(1);
+    client.add_urc_first_socket_connected();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let mut socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+
+    // Eight bytes of data available to receive()
+    adapter.client.add_urc_message(b"+IPD,0,8\r\n");
+    adapter.process_urc_messages();
+
+    adapter.client.add_urc_first_socket_closed();
+    adapter.close(socket).unwrap();
+
+    let mut socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    // Connect command
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_first_socket_connected();
+
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+
+    // No data available
+    let error = adapter.receive(&mut socket, &mut [0x0; 32]).unwrap_err();
+    assert_eq!(nb::Error::WouldBlock, error);
 }
 
 #[test]

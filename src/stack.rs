@@ -138,6 +138,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             return nb::Result::Err(nb::Error::Other(Error::UnconfirmedSocketState));
         }
 
+        self.data_available[socket.link_id] = 0;
         nb::Result::Ok(())
     }
 
