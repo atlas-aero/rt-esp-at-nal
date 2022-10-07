@@ -11,7 +11,7 @@ Currently, this crates offers the following features
 * TCP client stack (multi socket), s. [stack module](https://docs.rs/ltc681x/latest/esp-at-nal/stack)
 
 ## Example
-````Rust
+````rust
 use std::str::FromStr;
 use embedded_nal::{SocketAddr, TcpClientStack};
 use esp_at_nal::example::ExampleTimer;
