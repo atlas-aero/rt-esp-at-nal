@@ -7,8 +7,8 @@
 Network layer implementation/client for [ESP-AT](https://docs.espressif.com/projects/esp-at/) implementing [embedded-nal](https://crates.io/crates/embedded-nal) based on [ATAT](https://crates.io/crates/atat).
 
 Currently, this crates offers the following features
-* Joining an WIFI access point, s. [wifi module](https://docs.rs/ltc681x/latest/esp-at-nal/wifi)
-* TCP client stack (multi socket), s. [stack module](https://docs.rs/ltc681x/latest/esp-at-nal/stack)
+* Joining an WIFI access point, s. [wifi module](https://docs.rs/esp-at-nal/latest/esp_at_nal/wifi/index.html)
+* TCP client stack (multi socket), s. [stack module](https://docs.rs/esp-at-nal/latest/esp_at_nal/stack/index.html)
 
 ## Example
 ````rust
