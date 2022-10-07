@@ -9,7 +9,7 @@
 //! ## Example
 //!
 //! ````
-//! # use std::str::FromStr;
+//! # use core::str::FromStr;
 //! # use embedded_nal::{SocketAddr, TcpClientStack};
 //! # use esp_at_nal::example::ExampleTimer;
 //! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
