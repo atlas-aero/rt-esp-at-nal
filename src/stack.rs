@@ -1,3 +1,37 @@
+//! # TCP client stack
+//!
+//! This crate fully implements [TcpClientStack] of [embedded_nal].
+//!
+//! Block/chunk size is defined a const generics, s. [Adapter] for more details.
+//!
+//! ## Example
+//!
+//! ````
+//! # use std::str::FromStr;
+//! # use embedded_nal::{SocketAddr, TcpClientStack};
+//! # use esp_at_nal::example::ExampleTimer;
+//! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
+//! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
+//! #
+//! let client = AtClient::default();
+//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 1024> = Adapter::new(client, ExampleTimer::default());
+//!
+//! // Creating a TCP connection
+//! let mut  socket = adapter.socket().unwrap();
+//! adapter.connect(&mut socket, SocketAddr::from_str("10.0.0.1:21").unwrap()).unwrap();
+//!
+//! // Sending some data
+//! adapter.send(&mut socket, b"hallo!").unwrap();
+//!
+//! // Receiving some data
+//! let mut  rx_buffer = [0x0; 64];
+//! let length = adapter.receive(&mut socket, &mut rx_buffer).unwrap();
+//! assert_eq!(16, length);
+//! assert_eq!(b"nice to see you!", &rx_buffer[..16]);
+//!
+//! // Closing socket
+//! adapter.close(socket).unwrap();
+//! ````
 use crate::commands::{
     CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,

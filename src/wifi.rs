@@ -1,3 +1,33 @@
+//! # WIFI access point client
+//!
+//! Joining a network and obtaining address information is supported.
+//!
+//! Note: If the connection was not successful or is lost, the ESP-AT will try independently fro time
+//! to time (by default every second) to establish connection to the network. The status can be
+//! queried using `get_join_state()`.
+//!
+//! ## Example
+//!
+//! ````
+//! # use std::str::FromStr;
+//! # use embedded_nal::{SocketAddr, TcpClientStack};
+//! # use esp_at_nal::example::ExampleTimer;
+//! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
+//! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
+//! #
+//! let client = AtClient::default();
+//! let mut adapter: Adapter<_, _, 1_000_000, 256, 256> = Adapter::new(client, ExampleTimer::default());
+//!
+//! // Setting target WIFI access point
+//! adapter.join("test_wifi", "secret").unwrap();
+//!
+//! // Waiting until a DCHP IP has been assigned
+//! while !adapter.get_join_status().ip_assigned {}
+//!
+//! let address = adapter.get_address().unwrap();
+//! assert_eq!("10:fe:ed:05:ba:50", address.mac.unwrap().as_str());
+//! assert_eq!("10.0.0.181", address.ipv4.unwrap().to_string());
+//! ````
 use crate::commands::{
     AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, SetSocketReceivingModeCommand,
     WifiModeCommand,
@@ -150,6 +180,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             ip_assigned: self.ip_assigned,
         })
     }
+
     /// Returns the current WIFI connection status
     fn get_join_status(&mut self) -> JoinState {
         self.process_urc_messages();

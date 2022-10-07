@@ -1,3 +1,7 @@
+//! # URC parser implementation
+//!
+//! This is just used internally, but needs to be public for passing [URCMessages] as a generic to
+//! [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`.
 use atat::digest::ParseError;
 use atat::{AtatUrc, Parser};
 use heapless::Vec;

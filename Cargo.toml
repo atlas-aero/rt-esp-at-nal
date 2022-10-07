@@ -23,8 +23,13 @@ heapless = "0.7.16"
 mockall = "0.11.2"
 
 [features]
+default = ["examples"]
+
 # Fail on warnings
 strict = []
 
 # Enables logging of ATAT crate
 log = ['atat/log']
+
+# Contains mocks for doc examples and may be disabled for production.
+examples = []
