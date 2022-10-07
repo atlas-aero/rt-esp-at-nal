@@ -1,0 +1,143 @@
+name: QA
+
+on:
+  push:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+jobs:
+  test:
+    name: Build & test
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+        rust:
+          - stable
+          - beta
+          - nightly
+        redis-version: [6]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          default: true
+          profile: minimal
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Start Redis
+        uses: supercharge/redis-github-action@1.4.0
+        with:
+          redis-version: ${{ matrix.redis-version }}
+
+      - name: Build & test
+        env:
+          RUST_VERSION: ${{ matrix.rust }}
+          OS: ${{ matrix.os }}
+          RUSTFLAGS: -D warnings
+        run: cargo test
+
+      - name: Build default features
+        run: cargo build --release --features strict
+
+  no_std_builds:
+    name: Build no_std targets
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - thumbv6m-none-eabi
+          - thumbv7m-none-eabi
+        rust:
+          - stable
+          - beta
+          - nightly
+        include:
+          - target: thumbv6m-none-eabi
+            features: "strict,thumbv6"
+          - target: thumbv7m-none-eabi
+            features: "strict"
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+          default: true
+          profile: minimal
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --features ${{ matrix.features }}
+
+  code_style:
+    name: Check code style
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          default: true
+          components: rustfmt
+
+      - run: cargo fmt --all -- --check
+
+  documentation:
+    name: Check documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Check documentation
+        run: cargo rustdoc --all-features -- -D warnings
+
+  clippy:
+    name: Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          default: true
+
+      - name: Restore cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
