@@ -178,7 +178,7 @@ fn test_connect_correct_commands_ipv6() {
     assert_eq!(3, commands.len());
     assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
     assert_eq!(
-        "AT+CIPSTART=0,\"TCPv6\",\"2001:db8::1\",8080\r\n".to_string(),
+        "AT+CIPSTART=0,\"TCPv6\",\"2001:0db8:0000:0000:0000:0000:0000:0001\",8080\r\n".to_string(),
         commands[2]
     );
 }
