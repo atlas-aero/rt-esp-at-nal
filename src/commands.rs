@@ -184,12 +184,20 @@ fn ipv6_to_string(ip: &Ipv6Addr) -> String<MAX_IP_LENGTH> {
     let mut ip_string = String::new();
     let mut hex_buf = [0u8; 4];
     for (i, segment) in ip.segments().iter().enumerate() {
-        // Hex-encode IPv6 segment
-        base16::encode_config_slice(&segment.to_be_bytes(), base16::EncodeLower, &mut hex_buf);
-        ip_string
-            // Safety: The result from hex-encoding will always be valid UTF-8
-            .write_str(unsafe { core::str::from_utf8_unchecked(&hex_buf) })
-            .unwrap();
+        // Write segment (hexadectet)
+        if segment == &0 {
+            // All-zero-segments can be shortened
+            ip_string.write_str("0").unwrap()
+        } else {
+            // Hex-encode IPv6 segment
+            base16::encode_config_slice(&segment.to_be_bytes(), base16::EncodeLower, &mut hex_buf);
+            ip_string
+                // Safety: The result from hex-encoding will always be valid UTF-8
+                .write_str(unsafe { core::str::from_utf8_unchecked(&hex_buf) })
+                .unwrap();
+        }
+
+        // Write separator
         if i != 7 {
             ip_string.write_char(':').unwrap();
         }
@@ -374,7 +382,7 @@ mod tests {
 
     #[test]
     fn test_ipv6_to_string() {
-        test_v6!(0, 0, 0, 0, 0, 0, 0, 1, "0000:0000:0000:0000:0000:0000:0000:0001"); // ::1
+        test_v6!(0, 0, 0, 0, 0, 0, 0, 1, "0:0:0:0:0:0:0:0001"); // ::1
         test_v6!(
             0x0102,
             0xaabb,
@@ -384,7 +392,7 @@ mod tests {
             0x1111,
             0x2222,
             0x3333,
-            "0102:aabb:ffff:4242:0000:1111:2222:3333"
+            "0102:aabb:ffff:4242:0:1111:2222:3333"
         );
     }
 }
