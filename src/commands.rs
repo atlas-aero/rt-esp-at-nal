@@ -49,7 +49,7 @@ impl CommandErrorHandler for WifiModeCommand {
 
 /// Command for setting the target WIFI access point parameters
 #[derive(Clone, Default, AtatCmd)]
-#[at_cmd("+CWJAP", NoResponse, timeout_ms = 5_000)]
+#[at_cmd("+CWJAP", NoResponse, timeout_ms = 20_000)]
 pub struct AccessPointConnectCommand {
     /// The SSID of the target access point
     #[at_arg(position = 0)]
