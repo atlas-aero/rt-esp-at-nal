@@ -1,12 +1,16 @@
+use core::fmt::Write;
+
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
 use crate::wifi::{AddressErrors, JoinError};
-use alloc::string::ToString;
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
 use atat::{AtatCmd, Error as AtError, InternalError};
-use embedded_nal::{SocketAddrV4, SocketAddrV6};
+use embedded_nal::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use numtoa::NumToA;
+
+const MAX_IP_LENGTH: usize = 39; // IPv4: 15, IPv6: 39
 
 /// Trait for mapping command errors
 pub trait CommandErrorHandler {
@@ -156,10 +160,49 @@ pub struct ConnectCommand {
     connection_type: String<5>,
 
     /// Remote IPv4 or IPV6 address
-    remote_host: String<39>,
+    remote_host: String<MAX_IP_LENGTH>,
 
     /// Remote port
     port: u16,
+}
+
+/// Convert a `IPv4Addr` to a heapless `String`
+fn ipv4_to_string(ip: &Ipv4Addr) -> String<MAX_IP_LENGTH> {
+    let mut ip_string = String::new();
+    let mut num_buf = [0u8; 3];
+    for (i, octet) in ip.octets().iter().enumerate() {
+        ip_string.write_str(octet.numtoa_str(10, &mut num_buf)).unwrap();
+        if i != 3 {
+            ip_string.write_char('.').unwrap();
+        }
+    }
+    ip_string
+}
+
+/// Convert a `SocketAddrV6` IP to a heapless `String`
+fn ipv6_to_string(ip: &Ipv6Addr) -> String<MAX_IP_LENGTH> {
+    let mut ip_string = String::new();
+    let mut hex_buf = [0u8; 4];
+    for (i, segment) in ip.segments().iter().enumerate() {
+        // Write segment (hexadectet)
+        if segment == &0 {
+            // All-zero-segments can be shortened
+            ip_string.write_str("0").unwrap()
+        } else {
+            // Hex-encode IPv6 segment
+            base16::encode_config_slice(&segment.to_be_bytes(), base16::EncodeLower, &mut hex_buf);
+            ip_string
+                // Safety: The result from hex-encoding will always be valid UTF-8
+                .write_str(unsafe { core::str::from_utf8_unchecked(&hex_buf) })
+                .unwrap();
+        }
+
+        // Write separator
+        if i != 7 {
+            ip_string.write_char(':').unwrap();
+        }
+    }
+    ip_string
 }
 
 impl ConnectCommand {
@@ -168,7 +211,7 @@ impl ConnectCommand {
         Self {
             link_id,
             connection_type: String::from("TCP"),
-            remote_host: String::from(remote.ip().to_string().as_str()),
+            remote_host: ipv4_to_string(remote.ip()),
             port: remote.port(),
         }
     }
@@ -178,7 +221,7 @@ impl ConnectCommand {
         Self {
             link_id,
             connection_type: String::from("TCPv6"),
-            remote_host: String::from(remote.ip().to_string().as_str()),
+            remote_host: ipv6_to_string(remote.ip()),
             port: remote.port(),
         }
     }
@@ -300,5 +343,56 @@ impl CommandErrorHandler for CloseSocketCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         StackError::CloseError(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use embedded_nal::{Ipv4Addr, Ipv6Addr};
+    use heapless::String;
+
+    use super::MAX_IP_LENGTH;
+
+    macro_rules! test_v4 {
+        ($a:expr, $b:expr, $c:expr, $d:expr, $string:literal) => {{
+            assert_eq!(
+                super::ipv4_to_string(&Ipv4Addr::new($a, $b, $c, $d)),
+                String::<MAX_IP_LENGTH>::from($string)
+            );
+        }};
+    }
+
+    macro_rules! test_v6 {
+        ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $string:literal) => {{
+            assert_eq!(
+                super::ipv6_to_string(&Ipv6Addr::new($a, $b, $c, $d, $e, $f, $g, $h)),
+                String::<MAX_IP_LENGTH>::from($string)
+            );
+        }};
+    }
+
+    #[test]
+    fn test_ipv4_to_string() {
+        test_v4!(127, 0, 0, 1, "127.0.0.1");
+        test_v4!(0, 0, 0, 0, "0.0.0.0");
+        test_v4!(255, 255, 255, 0, "255.255.255.0");
+        test_v4!(255, 255, 255, 255, "255.255.255.255");
+        test_v4!(1, 2, 3, 4, "1.2.3.4");
+    }
+
+    #[test]
+    fn test_ipv6_to_string() {
+        test_v6!(0, 0, 0, 0, 0, 0, 0, 1, "0:0:0:0:0:0:0:0001"); // ::1
+        test_v6!(
+            0x0102,
+            0xaabb,
+            0xffff,
+            0x4242,
+            0x0000,
+            0x1111,
+            0x2222,
+            0x3333,
+            "0102:aabb:ffff:4242:0:1111:2222:3333"
+        );
     }
 }
