@@ -1,4 +1,5 @@
 # no_std ESP-AT network layer
+
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Crates.io](https://img.shields.io/crates/v/esp-at-nal.svg)](https://crates.io/crates/esp-at-nal)
@@ -11,6 +12,9 @@ Currently, this crates offers the following features
 * TCP client stack (multi socket), s. [stack module](https://docs.rs/esp-at-nal/latest/esp_at_nal/stack/index.html)
 
 ## Example
+
+Here's a simple example using a mocked AtClient:
+
 ````rust
 use std::str::FromStr;
 use embedded_nal::{SocketAddr, TcpClientStack};
@@ -34,6 +38,13 @@ adapter.connect(&mut socket, SocketAddr::from_str("10.0.0.1:21").unwrap()).unwra
 adapter.send(&mut socket, b"hallo!").unwrap();
 ````
 
+To see a real-world example that runs on Linux, check out `examples/linux.rs`:
+
+    # For logging
+    export RUST_LOG=trace
+
+    cargo run --example linux --features "atat/log" -- \
+        /dev/ttyUSB0 115200 mywifi hellopasswd123
 
 ## Development
 
@@ -41,6 +52,7 @@ Any form of support is greatly appreciated. Feel free to create issues and PRs.
 See [DEVELOPMENT](DEVELOPMENT.md) for more details.
 
 ## License
+
 Licensed under either of
 
 * Apache License, Version 2.0, (LICENSE-APACHE or http://www.apache.org/licenses/LICENSE-2.0)
