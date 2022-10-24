@@ -1,6 +1,6 @@
 use crate::tests::mock::{MockAtatClient, MockTimer};
 use crate::wifi::{Adapter, JoinError};
-use crate::wifi::{RestartErrors, WifiAdapter};
+use crate::wifi::{CommandError, WifiAdapter};
 use alloc::string::ToString;
 use atat::Error;
 
@@ -217,7 +217,7 @@ fn test_restart_command_failed() {
     let mut adapter: AdapterType = Adapter::new(client, timer);
     let error = adapter.restart().unwrap_err();
 
-    assert_eq!(RestartErrors::CommandError(Error::Parse), error);
+    assert_eq!(CommandError::CommandFailed(Error::Parse), error);
 }
 
 #[test]
@@ -229,7 +229,7 @@ fn test_restart_command_would_block() {
     let mut adapter: AdapterType = Adapter::new(client, timer);
     let error = adapter.restart().unwrap_err();
 
-    assert_eq!(RestartErrors::UnexpectedWouldBlock, error);
+    assert_eq!(CommandError::UnexpectedWouldBlock, error);
 }
 
 #[test]
@@ -243,7 +243,7 @@ fn test_restart_upstream_timer_start_error() {
     let mut adapter: AdapterType = Adapter::new(client, timer);
     let error = adapter.restart().unwrap_err();
 
-    assert_eq!(RestartErrors::TimerError, error);
+    assert_eq!(CommandError::TimerError, error);
 }
 
 #[test]
@@ -261,7 +261,7 @@ fn test_restart_upstream_timer_wait_error() {
     let mut adapter: AdapterType = Adapter::new(client, timer);
     let error = adapter.restart().unwrap_err();
 
-    assert_eq!(RestartErrors::TimerError, error);
+    assert_eq!(CommandError::TimerError, error);
 }
 
 #[test]
@@ -335,7 +335,7 @@ fn test_restart_ready_timeout() {
     let mut adapter: AdapterType = Adapter::new(client, timer);
     let error = adapter.restart().unwrap_err();
 
-    assert_eq!(RestartErrors::ReadyTimeout, error);
+    assert_eq!(CommandError::ReadyTimeout, error);
 }
 
 #[test]
@@ -364,4 +364,46 @@ fn test_restart_wifi_state_reset() {
 
     assert!(!adapter.get_join_status().connected);
     assert!(!adapter.get_join_status().ip_assigned);
+}
+
+#[test]
+fn test_set_auto_connect_error() {
+    let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+    client.add_error_response();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let result = adapter.set_auto_connect(true).unwrap_err();
+
+    assert_eq!(CommandError::CommandFailed(Error::Parse), result);
+}
+
+#[test]
+fn test_enable_auto_connect_would_block() {
+    let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+    client.send_would_block(0);
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.set_auto_connect(true).unwrap_err();
+
+    assert_eq!(CommandError::UnexpectedWouldBlock, error);
+}
+
+#[test]
+fn test_set_auto_connect_correct_command() {
+    let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+
+    client.add_ok_response();
+    client.add_ok_response();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    adapter.set_auto_connect(true).unwrap();
+    adapter.set_auto_connect(false).unwrap();
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(2, commands.len());
+    assert_eq!("AT+CWAUTOCONN=1\r\n".to_string(), commands[0]);
+    assert_eq!("AT+CWAUTOCONN=0\r\n".to_string(), commands[1]);
 }

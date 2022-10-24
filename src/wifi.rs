@@ -29,7 +29,7 @@
 //! assert_eq!("10.0.0.181", address.ipv4.unwrap().to_string());
 //! ````
 use crate::commands::{
-    AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, RestartCommand,
+    AccessPointConnectCommand, AutoConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, RestartCommand,
     SetSocketReceivingModeCommand, WifiModeCommand,
 };
 use crate::responses::LocalAddressResponse;
@@ -53,6 +53,9 @@ pub trait WifiAdapter {
     /// Error when receiving local address information
     type AddressError: Debug;
 
+    /// Errors for configuration commands
+    type ConfigurationErrors: Debug;
+
     /// Errors when restarting the module
     type RestartError: Debug;
 
@@ -64,6 +67,9 @@ pub trait WifiAdapter {
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, Self::AddressError>;
+
+    /// Enables/Disables auto connect, so that ESP-AT whether automatically joins to the stored AP when powered on.
+    fn set_auto_connect(&mut self, enabled: bool) -> Result<(), Self::ConfigurationErrors>;
 
     /// Restarts the module and blocks until ready
     fn restart(&mut self) -> Result<(), Self::RestartError>;
@@ -191,11 +197,11 @@ pub enum AddressErrors {
     UnexpectedWouldBlock,
 }
 
-/// Errors when restarting the module
+/// General errors for simple commands (e.g. enabling a configuration flag)
 #[derive(Clone, Debug, PartialEq)]
-pub enum RestartErrors {
-    /// +RST command failed
-    CommandError(AtError),
+pub enum CommandError {
+    /// Command failed with the given upstream error
+    CommandFailed(AtError),
 
     /// No ready message received within timout (5 seconds)
     ReadyTimeout,
@@ -223,7 +229,8 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 {
     type JoinError = JoinError;
     type AddressError = AddressErrors;
-    type RestartError = RestartErrors;
+    type ConfigurationErrors = CommandError;
+    type RestartError = CommandError;
 
     /// Connects to an WIFI access point and returns the connection state
     ///
@@ -257,23 +264,29 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         LocalAddress::from_responses(responses)
     }
 
+    /// Enables auto connect, so that ESP-AT automatically connects to the stored AP when powered on.
+    fn set_auto_connect(&mut self, enabled: bool) -> Result<(), CommandError> {
+        self.send_command(AutoConnectCommand::new(enabled))?;
+        Ok(())
+    }
+
     /// Restarts the module and blocks until the module is ready.
     /// If module is not ready within five seconds, [RestartErrors::ReadyTimeout] is returned
-    fn restart(&mut self) -> Result<(), RestartErrors> {
+    fn restart(&mut self) -> Result<(), CommandError> {
         self.session.ready = false;
         self.send_command(RestartCommand::default())?;
 
         self.session = Session::default();
 
-        self.timer.start(5.secs()).map_err(|_| RestartErrors::TimerError)?;
+        self.timer.start(5.secs()).map_err(|_| CommandError::TimerError)?;
         while !self.session.ready {
             if let nb::Result::Err(error) = self.timer.wait() {
                 match error {
-                    Error::Other(_) => return Err(RestartErrors::TimerError),
+                    Error::Other(_) => return Err(CommandError::TimerError),
                     Error::WouldBlock => {}
                 }
             } else {
-                return Err(RestartErrors::ReadyTimeout);
+                return Err(CommandError::ReadyTimeout);
             }
 
             self.process_urc_messages();
