@@ -29,8 +29,8 @@
 //! assert_eq!("10.0.0.181", address.ipv4.unwrap().to_string());
 //! ````
 use crate::commands::{
-    AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, SetSocketReceivingModeCommand,
-    WifiModeCommand,
+    AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, RestartCommand,
+    SetSocketReceivingModeCommand, WifiModeCommand,
 };
 use crate::responses::LocalAddressResponse;
 use crate::stack::SocketState;
@@ -43,6 +43,7 @@ use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
 use heapless::String;
+use nb::Error;
 
 /// Wifi network adapter trait
 pub trait WifiAdapter {
@@ -52,6 +53,9 @@ pub trait WifiAdapter {
     /// Error when receiving local address information
     type AddressError: Debug;
 
+    /// Errors when restarting the module
+    type RestartError: Debug;
+
     /// Connects to an WIFI access point and returns the connection state
     fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, Self::JoinError>;
 
@@ -60,6 +64,9 @@ pub trait WifiAdapter {
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, Self::AddressError>;
+
+    /// Restarts the module and blocks until ready
+    fn restart(&mut self) -> Result<(), Self::RestartError>;
 }
 
 /// Central client for network communication
@@ -83,6 +90,9 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
 
     /// True if an IP was assigned by access point. Get updated by URC message.
     ip_assigned: bool,
+
+    /// True if a URC ready message arrived.
+    ready: bool,
 
     /// True if multiple connections have been enabled
     pub(crate) multi_connections_enabled: bool,
@@ -148,6 +158,23 @@ pub enum AddressErrors {
     UnexpectedWouldBlock,
 }
 
+/// Errors when restarting the module
+#[derive(Clone, Debug, PartialEq)]
+pub enum RestartErrors {
+    /// +RST command failed
+    CommandError(AtError),
+
+    /// No ready message received within timout (5 seconds)
+    ReadyTimeout,
+
+    /// Upstream timer error
+    TimerError,
+
+    /// Received an unexpected WouldBlock. The most common cause of errors is an incorrect mode of the client.
+    /// This must be either timeout or blocking.
+    UnexpectedWouldBlock,
+}
+
 /// Current WIFI connection state
 #[derive(Copy, Clone, Debug)]
 pub struct JoinState {
@@ -163,6 +190,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 {
     type JoinError = JoinError;
     type AddressError = AddressErrors;
+    type RestartError = RestartErrors;
 
     /// Connects to an WIFI access point and returns the connection state
     ///
@@ -195,6 +223,37 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         let responses = self.send_command(ObtainLocalAddressCommand::new())?;
         LocalAddress::from_responses(responses)
     }
+
+    /// Restarts the module and blocks until the module is ready.
+    /// If module is not ready within five seconds, [RestartErrors::ReadyTimeout] is returned
+    fn restart(&mut self) -> Result<(), RestartErrors> {
+        self.ready = false;
+        self.send_command(RestartCommand::default())?;
+
+        self.joined = false;
+        self.ip_assigned = false;
+        self.sockets = [SocketState::Closed; 5];
+        self.data_available = [0; 5];
+        self.data = None;
+        self.passive_mode_enabled = false;
+        self.multi_connections_enabled = false;
+
+        self.timer.start(5.secs()).map_err(|_| RestartErrors::TimerError)?;
+        while !self.ready {
+            if let nb::Result::Err(error) = self.timer.wait() {
+                match error {
+                    Error::Other(_) => return Err(RestartErrors::TimerError),
+                    Error::WouldBlock => {}
+                }
+            } else {
+                return Err(RestartErrors::ReadyTimeout);
+            }
+
+            self.process_urc_messages();
+        }
+
+        Ok(())
+    }
 }
 
 impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
@@ -208,6 +267,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             send_timeout: 5_000.millis(),
             joined: false,
             ip_assigned: false,
+            ready: false,
             multi_connections_enabled: false,
             passive_mode_enabled: false,
             sockets: [SocketState::Closed; 5],
@@ -238,7 +298,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             }
             URCMessages::ReceivedIP => self.ip_assigned = true,
             URCMessages::WifiConnected => self.joined = true,
-            URCMessages::Ready => {}
+            URCMessages::Ready => self.ready = true,
             URCMessages::SocketConnected(link_id) => self.sockets[link_id] = SocketState::Connected,
             URCMessages::SocketClosed(link_id) => self.sockets[link_id] = SocketState::Closing,
             URCMessages::AlreadyConnected => self.already_connected = true,
