@@ -387,8 +387,8 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
         self.sockets[socket.link_id].data_available -= length;
     }
 
-    /// Returns true if the reported received byte length doest NOT matches the actual data length
-    /// Returns false if not received byte count was reported by ESP-AT (older firmware version)
+    /// Returns true if the reported received byte length does NOT match the actual data length
+    /// Returns false if received byte count was not reported by ESP-AT (older firmware version)
     fn is_received_byte_count_incorrect(&self, actual_data_length: usize) -> bool {
         self.recv_byte_count.is_some() && *self.recv_byte_count.as_ref().unwrap() != actual_data_length
     }
