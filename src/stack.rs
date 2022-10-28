@@ -251,6 +251,11 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     fn close(&mut self, socket: Self::TcpSocket) -> Result<(), Self::Error> {
         self.process_urc_messages();
 
+        // Socket already closed during restart
+        if self.session.is_socket_closed(&socket) {
+            return Ok(());
+        }
+
         // Socket is not connected yet or was already closed remotely
         if self.session.is_socket_closing(&socket) || self.session.is_socket_open(&socket) {
             self.session.sockets[socket.link_id].state = ConnectionState::Closed;
@@ -401,6 +406,11 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
     /// Returns true if the given socket is in OPEN state
     fn is_socket_open(&self, socket: &Socket) -> bool {
         self.sockets[socket.link_id].state == ConnectionState::Open
+    }
+
+    /// Returns true if the given socket is in CLOSED state
+    fn is_socket_closed(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].state == ConnectionState::Closed
     }
 
     /// Returns true if the given socket is in CLOSING state

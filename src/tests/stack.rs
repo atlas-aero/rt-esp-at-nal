@@ -1051,7 +1051,7 @@ fn test_receive_data_received_buffer_overflow() {
 }
 
 #[test]
-fn test_closed_socket_not_connected_yet() {
+fn test_close_socket_not_connected_yet() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1074,7 +1074,7 @@ fn test_closed_socket_not_connected_yet() {
 }
 
 #[test]
-fn test_closed_socket_already_closed_by_remote() {
+fn test_close_socket_already_closed_by_remote() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1095,7 +1095,59 @@ fn test_closed_socket_already_closed_by_remote() {
 }
 
 #[test]
-fn test_closed_socket_command_error() {
+fn test_close_open_socket() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+
+    adapter.client.reset_captured_commands();
+    adapter.close(socket).unwrap();
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    // Asserts that no close command is sent
+    let commands = adapter.client.get_commands_as_strings();
+    assert!(commands.is_empty());
+}
+
+#[test]
+fn test_close_after_restart() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    // Response to RST command
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+    adapter.restart().unwrap();
+
+    adapter.client.reset_captured_commands();
+    adapter.close(socket).unwrap();
+
+    // Asserts that no close command is sent
+    assert!(adapter.client.get_commands_as_strings().is_empty());
+
+    // Socket is available for reuse
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+}
+
+#[test]
+fn test_close_socket_command_error() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1111,7 +1163,7 @@ fn test_closed_socket_command_error() {
 }
 
 #[test]
-fn test_closed_socket_command_would_block() {
+fn test_close_socket_command_would_block() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1127,7 +1179,7 @@ fn test_closed_socket_command_would_block() {
 }
 
 #[test]
-fn test_closed_socket_unconfirmed() {
+fn test_close_socket_unconfirmed() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1143,7 +1195,7 @@ fn test_closed_socket_unconfirmed() {
 }
 
 #[test]
-fn test_closed_socket_closed_successfully() {
+fn test_close_socket_closed_successfully() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
