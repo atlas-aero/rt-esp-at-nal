@@ -271,7 +271,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     }
 
     /// Restarts the module and blocks until the module is ready.
-    /// If module is not ready within five seconds, [RestartErrors::ReadyTimeout] is returned
+    /// If module is not ready within five seconds, [CommandError::ReadyTimeout] is returned
     fn restart(&mut self) -> Result<(), CommandError> {
         self.session.ready = false;
         self.send_command(RestartCommand::default())?;
