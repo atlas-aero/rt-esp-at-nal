@@ -130,7 +130,11 @@ impl<const RX_SIZE: usize> Parser for URCMessages<RX_SIZE> {
             return matcher.handle();
         }
 
-        LineBasedMatcher::new(buf).handle()
+        if let Ok(result) = LineBasedMatcher::new(buf).handle() {
+            return Ok(result);
+        }
+
+        BootMessageParser::new(buf).handle()
     }
 }
 
@@ -296,5 +300,46 @@ impl<'a> DataMessage<'a> {
         vec.extend_from_slice(self.data).ok()?;
 
         Some(vec)
+    }
+}
+
+/// Parser for boot messages
+struct BootMessageParser<'a> {
+    buffer: &'a [u8],
+}
+
+impl<'a> BootMessageParser<'a> {
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Self { buffer }
+    }
+
+    /// Matches if a boot sequence is detected an a ready message is found
+    pub fn handle(self) -> Result<(&'a [u8], usize), ParseError> {
+        let mut is_boot_seq = false;
+        let mut size = 0;
+
+        for line in self.buffer.split(|b| b == &b'\n') {
+            size += line.len() + 1;
+
+            if !is_boot_seq && self.is_boot_line(line) {
+                is_boot_seq = true;
+                continue;
+            }
+
+            if is_boot_seq && line == b"ready\r" {
+                return Ok((b"ready\r\n", size));
+            }
+        }
+
+        Err(ParseError::NoMatch)
+    }
+
+    /// Returns true if a boot line like "ets Jan  8 2013,rst cause:1, boot mode:(3,7)" is found
+    fn is_boot_line(&self, line: &[u8]) -> bool {
+        if let Ok(decoded) = core::str::from_utf8(line) {
+            return decoded.contains("rst cause:");
+        }
+
+        false
     }
 }

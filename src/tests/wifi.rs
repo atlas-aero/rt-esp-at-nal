@@ -1,6 +1,6 @@
 use crate::tests::mock::{MockAtatClient, MockTimer};
-use crate::wifi::WifiAdapter;
 use crate::wifi::{Adapter, JoinError};
+use crate::wifi::{RestartErrors, WifiAdapter};
 use alloc::string::ToString;
 use atat::Error;
 
@@ -206,4 +206,162 @@ fn test_get_join_state_connected_without_ip() {
     let result = adapter.get_join_status();
     assert!(result.connected);
     assert!(!result.ip_assigned);
+}
+
+#[test]
+fn test_restart_command_failed() {
+    let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+    client.add_error_response();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.restart().unwrap_err();
+
+    assert_eq!(RestartErrors::CommandError(Error::Parse), error);
+}
+
+#[test]
+fn test_restart_command_would_block() {
+    let mut client = MockAtatClient::new();
+    let timer = MockTimer::new();
+    client.send_would_block(0);
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.restart().unwrap_err();
+
+    assert_eq!(RestartErrors::UnexpectedWouldBlock, error);
+}
+
+#[test]
+fn test_restart_upstream_timer_start_error() {
+    let mut client = MockAtatClient::new();
+    client.add_ok_response();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(move |_| Err(31));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.restart().unwrap_err();
+
+    assert_eq!(RestartErrors::TimerError, error);
+}
+
+#[test]
+fn test_restart_upstream_timer_wait_error() {
+    let mut client = MockAtatClient::new();
+    client.add_ok_response();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(move |_| Ok(()));
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(move || nb::Result::Err(nb::Error::Other(1)));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.restart().unwrap_err();
+
+    assert_eq!(RestartErrors::TimerError, error);
+}
+
+#[test]
+fn test_restart_ready_received() {
+    let mut client = MockAtatClient::new();
+    client.add_ok_response();
+    client.add_urc_ready();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    adapter.restart().unwrap();
+
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(1, commands.len());
+    assert_eq!("AT+RST\r\n".to_string(), commands[0]);
+}
+
+#[test]
+fn test_restart_double() {
+    let mut client = MockAtatClient::new();
+    client.add_ok_response();
+    client.add_urc_ready();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(2).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+    timer
+        .expect_wait()
+        .times(2)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    adapter.restart().unwrap();
+
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+
+    // Assert that ready state is reset and a second restart is possible
+    adapter.restart().unwrap();
+
+    assert_eq!(2, adapter.client.get_commands_as_strings().len());
+}
+
+#[test]
+fn test_restart_ready_timeout() {
+    let mut client = MockAtatClient::new();
+    client.add_ok_response();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+    timer.expect_wait().times(1).returning(|| nb::Result::Ok(()));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let error = adapter.restart().unwrap_err();
+
+    assert_eq!(RestartErrors::ReadyTimeout, error);
+}
+
+#[test]
+fn test_restart_wifi_state_reset() {
+    let mut client = MockAtatClient::new();
+    client.add_urc_wifi_connected();
+    client.add_urc_wifi_got_ip();
+
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|duration| {
+        assert_eq!(duration, MockTimer::duration_ms(5_000));
+        Ok(())
+    });
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    // Faking WIFI connection state
+    adapter.process_urc_messages();
+
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+    adapter.restart().unwrap();
+
+    assert!(!adapter.get_join_status().connected);
+    assert!(!adapter.get_join_status().ip_assigned);
 }

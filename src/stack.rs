@@ -36,7 +36,7 @@ use crate::commands::{
     CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
 };
-use crate::wifi::Adapter;
+use crate::wifi::{Adapter, Session};
 use atat::AtatClient;
 use atat::Error as AtError;
 use embedded_nal::{SocketAddr, TcpClientStack};
@@ -57,9 +57,19 @@ impl Socket {
     }
 }
 
+/// Internal state of a single socket
+#[derive(Copy, Clone, Default)]
+pub(crate) struct SocketState {
+    /// Connection state
+    pub(crate) state: ConnectionState,
+
+    /// Data length in bytes available to receive which is buffered by ESP-AT
+    pub(crate) data_available: usize,
+}
+
 /// Internal connection state
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
-pub(crate) enum SocketState {
+pub(crate) enum ConnectionState {
     /// Socket is closed an may be (re)used
     Closed,
     /// Socket was returned by socket() but is not connected yet
@@ -68,6 +78,12 @@ pub(crate) enum SocketState {
     Connected,
     /// Socket was closed by URC message, but Socket object still exists and needs to be fully closed by calling 'close()'
     Closing,
+}
+
+impl Default for ConnectionState {
+    fn default() -> Self {
+        Self::Closed
+    }
 }
 
 /// Network related errors
@@ -147,12 +163,12 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     fn connect(&mut self, socket: &mut Socket, remote: SocketAddr) -> nb::Result<(), Self::Error> {
         self.process_urc_messages();
 
-        if self.sockets[socket.link_id] == SocketState::Connected {
+        if self.session.is_socket_connected(socket) {
             return nb::Result::Err(nb::Error::Other(Error::AlreadyConnected));
         }
 
         self.enable_passive_receiving_mode()?;
-        self.already_connected = false;
+        self.session.already_connected = false;
 
         let command = match remote {
             SocketAddr::V4(address) => ConnectCommand::tcp_v4(socket.link_id, address),
@@ -162,17 +178,17 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         self.process_urc_messages();
 
         // ESP-AT returned that given socket is already connected. This indicates that a URC Connect message was missed.
-        if self.already_connected {
-            self.sockets[socket.link_id] = SocketState::Connected;
+        if self.session.already_connected {
+            self.session.sockets[socket.link_id].state = ConnectionState::Connected;
             return nb::Result::Ok(());
         }
         result?;
 
-        if self.sockets[socket.link_id] != SocketState::Connected {
+        if !self.session.is_socket_connected(socket) {
             return nb::Result::Err(nb::Error::Other(Error::UnconfirmedSocketState));
         }
 
-        self.data_available[socket.link_id] = 0;
+        self.session.reset_available_data(socket);
         nb::Result::Ok(())
     }
 
@@ -180,7 +196,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     /// The current implementation never returns a Error.
     fn is_connected(&mut self, socket: &Self::TcpSocket) -> Result<bool, Self::Error> {
         self.process_urc_messages();
-        Ok(self.sockets[socket.link_id] == SocketState::Connected)
+        Ok(self.session.is_socket_connected(socket))
     }
 
     /// Sends the given buffer and returns the length (in bytes) sent.
@@ -204,23 +220,23 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     fn receive(&mut self, socket: &mut Self::TcpSocket, buffer: &mut [u8]) -> nb::Result<usize, Self::Error> {
         self.process_urc_messages();
 
-        if self.data_available[socket.link_id] == 0 {
+        if !self.session.is_data_available(socket) {
             return nb::Result::Err(nb::Error::WouldBlock);
         }
 
         let mut buffer: Buffer<RX_SIZE> = Buffer::new(buffer);
 
-        while self.data_available[socket.link_id] > 0 && !buffer.is_full() {
+        while self.session.is_data_available(socket) && !buffer.is_full() {
             let command = ReceiveDataCommand::<RX_SIZE>::new(socket.link_id, buffer.get_next_length());
             self.send_command(command)?;
             self.process_urc_messages();
 
-            if self.data.is_none() {
+            if self.session.data.is_none() {
                 return nb::Result::Err(nb::Error::Other(Error::ReceiveFailed(AtError::InvalidResponse)));
             }
 
-            let data = self.data.take().unwrap();
-            self.reduce_data_available(socket.link_id, data.len());
+            let data = self.session.data.take().unwrap();
+            self.session.reduce_available_data(socket, data.len());
             buffer.append(data)?;
         }
 
@@ -235,21 +251,26 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     fn close(&mut self, socket: Self::TcpSocket) -> Result<(), Self::Error> {
         self.process_urc_messages();
 
+        // Socket already closed during restart
+        if self.session.is_socket_closed(&socket) {
+            return Ok(());
+        }
+
         // Socket is not connected yet or was already closed remotely
-        if self.sockets[socket.link_id] == SocketState::Closing || self.sockets[socket.link_id] == SocketState::Open {
-            self.sockets[socket.link_id] = SocketState::Closed;
+        if self.session.is_socket_closing(&socket) || self.session.is_socket_open(&socket) {
+            self.session.sockets[socket.link_id].state = ConnectionState::Closed;
             return Ok(());
         }
 
         let mut result = self.send_command(CloseSocketCommand::new(socket.link_id));
         self.process_urc_messages();
 
-        if self.sockets[socket.link_id] != SocketState::Closing && result.is_ok() {
+        if !self.session.is_socket_closing(&socket) && result.is_ok() {
             result = Err(Error::UnconfirmedSocketState);
         }
 
         // Setting to Closed even on error. Otherwise socket can not be reused in future, as its consumed.
-        self.sockets[socket.link_id] = SocketState::Closed;
+        self.session.sockets[socket.link_id].state = ConnectionState::Closed;
 
         result?;
         Ok(())
@@ -261,16 +282,16 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 {
     /// Sends a chunk of max. 256 bytes
     fn send_chunk(&mut self, data: &[u8]) -> Result<(), Error> {
-        self.send_confirmed = None;
-        self.recv_byte_count = None;
+        self.session.send_confirmed = None;
+        self.session.recv_byte_count = None;
 
         self.send_command::<TransmissionCommand<'_>, TX_SIZE>(TransmissionCommand::new(data))?;
         self.timer.start(self.send_timeout).map_err(|_| Error::TimerError)?;
 
-        while self.send_confirmed.is_none() {
+        while self.session.send_confirmed.is_none() {
             self.process_urc_messages();
 
-            if let Some(send_success) = self.send_confirmed {
+            if let Some(send_success) = self.session.send_confirmed {
                 // Transmission failed
                 if !send_success {
                     // Reset prompt status. Otherwise client does not match any command responses.
@@ -279,7 +300,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
                 }
 
                 // Byte count does not match
-                if self.recv_byte_count.is_some() && *self.recv_byte_count.as_ref().unwrap() != data.len() {
+                if self.session.is_received_byte_count_incorrect(data.len()) {
                     return Err(Error::PartialSend);
                 }
 
@@ -305,31 +326,31 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     /// Enables multiple connections.
     /// Stores internal state, so command is just sent once for saving bandwidth
     fn enable_multiple_connections(&mut self) -> Result<(), Error> {
-        if self.multi_connections_enabled {
+        if self.session.multi_connections_enabled {
             return Ok(());
         }
 
         self.send_command(SetMultipleConnectionsCommand::multiple())?;
-        self.multi_connections_enabled = true;
+        self.session.multi_connections_enabled = true;
         Ok(())
     }
 
     /// Enables the passive socket receiving mode
     /// Stores internal state, so command is just sent once for saving bandwidth
     fn enable_passive_receiving_mode(&mut self) -> Result<(), Error> {
-        if self.passive_mode_enabled {
+        if self.session.passive_mode_enabled {
             return Ok(());
         }
 
         self.send_command(SetSocketReceivingModeCommand::passive_mode())?;
-        self.passive_mode_enabled = true;
+        self.session.passive_mode_enabled = true;
         Ok(())
     }
 
     /// Assigns a free link_id. Returns an error in case no more free sockets are available
     fn open_socket(&mut self) -> Result<Socket, Error> {
-        if let Some(link_id) = self.sockets.iter().position(|state| state == &SocketState::Closed) {
-            self.sockets[link_id] = SocketState::Open;
+        if let Some(link_id) = self.session.get_next_open() {
+            self.session.sockets[link_id].state = ConnectionState::Open;
             return Ok(Socket::new(link_id));
         }
 
@@ -338,25 +359,68 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
     /// Asserts that the given socket is connected and returns otherwise the appropriate error
     fn assert_socket_connected(&self, socket: &Socket) -> nb::Result<(), Error> {
-        if self.sockets[socket.link_id] == SocketState::Closing {
+        if self.session.is_socket_closing(socket) {
             return nb::Result::Err(nb::Error::Other(Error::ClosingSocket));
         }
 
-        if self.sockets[socket.link_id] != SocketState::Connected {
+        if !self.session.is_socket_connected(socket) {
             return nb::Result::Err(nb::Error::Other(Error::SocketUnconnected));
         }
 
         nb::Result::Ok(())
     }
+}
 
-    /// Reduces the available data length mark by the given length
-    fn reduce_data_available(&mut self, link_id: usize, length: usize) {
-        if self.data_available[link_id] < length {
-            self.data_available[link_id] = 0;
+impl<const RX_SIZE: usize> Session<RX_SIZE> {
+    /// Fetches the next open socket ID and returns None in case no socket is available
+    fn get_next_open(&self) -> Option<usize> {
+        self.sockets.iter().position(|state| state.state == ConnectionState::Closed)
+    }
+
+    /// Returns true if data is available for the given socket
+    fn is_data_available(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].data_available > 0
+    }
+
+    /// Reduces the available data length mark by the given length of the given socket ID
+    fn reduce_available_data(&mut self, socket: &Socket, length: usize) {
+        if self.sockets[socket.link_id].data_available < length {
+            self.sockets[socket.link_id].data_available = 0;
             return;
         }
 
-        self.data_available[link_id] -= length;
+        self.sockets[socket.link_id].data_available -= length;
+    }
+
+    /// Returns true if the reported received byte length does NOT match the actual data length
+    /// Returns false if received byte count was not reported by ESP-AT (older firmware version)
+    fn is_received_byte_count_incorrect(&self, actual_data_length: usize) -> bool {
+        self.recv_byte_count.is_some() && *self.recv_byte_count.as_ref().unwrap() != actual_data_length
+    }
+
+    /// Sets the available data of the given socket to zero
+    fn reset_available_data(&mut self, socket: &Socket) {
+        self.sockets[socket.link_id].data_available = 0;
+    }
+
+    /// Returns true if the given socket is in OPEN state
+    fn is_socket_open(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].state == ConnectionState::Open
+    }
+
+    /// Returns true if the given socket is in CLOSED state
+    fn is_socket_closed(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].state == ConnectionState::Closed
+    }
+
+    /// Returns true if the given socket is in CLOSING state
+    fn is_socket_closing(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].state == ConnectionState::Closing
+    }
+
+    /// Returns true if the given socket is in CONNECTED state
+    fn is_socket_connected(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].state == ConnectionState::Connected
     }
 }
 

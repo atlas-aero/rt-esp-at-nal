@@ -140,6 +140,18 @@ fn test_first_parse_data_serial_data_incomplete() {
 }
 
 #[test]
+fn test_first_parse_boot_incomplete() {
+    assert!(<URCMessages<32> as Parser>::parse(b"ets Jan  8 2013,rst cause:1, boot mode:(3,7)").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"ets Jan  8 2013,rst cause:1, boot mode:(3,7)\r\n\n\r\n").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"tail 0\r\nready\r\n").is_err());
+}
+
+#[test]
+fn test_first_parse_boot_matches() {
+    assert_result(b"ready\r\n", 95, b"\r\nets Jan  8 2013,rst cause:1, boot mode:(3,7)\r\n\r\nload 0x40100000, len 2592, room 16\r\n\r\nready\r\nWIFI GOT IP\r\n");
+}
+
+#[test]
 fn test_first_parse_data_fully_received() {
     assert_result(b"+CIPRECVDATA,5:abcde", 20, b"+CIPRECVDATA,5:abcde\r\n\r\nOK\r\n");
     assert_result(

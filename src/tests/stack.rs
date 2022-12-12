@@ -1,6 +1,6 @@
 use crate::stack::{Error, Socket};
 use crate::tests::mock::{MockAtatClient, MockTimer};
-use crate::wifi::Adapter;
+use crate::wifi::{Adapter, WifiAdapter};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use atat::Error as AtError;
@@ -148,6 +148,63 @@ fn test_connect_correct_commands_ipv4() {
 
     let commands = adapter.client.get_commands_as_strings();
     assert_eq!(3, commands.len());
+    assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
+    assert_eq!("AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n".to_string(), commands[2]);
+}
+
+#[test]
+fn test_connect_after_restart() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let mut client = MockAtatClient::new();
+
+    // Responses to CIPMUX, CIPRECVMODE  and CIPSTART
+    client.add_ok_response();
+    client.add_ok_response();
+    client.add_ok_response();
+
+    client.skip_urc(1);
+    client.add_urc_first_socket_connected();
+
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    let mut socket = adapter.socket().unwrap();
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+
+    // Response to RST command
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+    adapter.restart().unwrap();
+
+    // Responses to CIPMUX, CIPRECVMODE  and CIPSTART
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+    adapter.client.add_ok_response();
+
+    adapter.client.skip_urc(1);
+    adapter.client.add_urc_first_socket_connected();
+
+    adapter.client.reset_captured_commands();
+
+    socket = adapter.socket().unwrap();
+    adapter
+        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
+        .unwrap();
+
+    // Assert that socket state gets reset on restart
+    assert_eq!(0, socket.link_id);
+
+    // Assert that internal state issued commands gets reset
+    let commands = adapter.client.get_commands_as_strings();
+    assert_eq!(3, commands.len());
+    assert_eq!("AT+CIPMUX=1\r\n".to_string(), commands[0]);
     assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
     assert_eq!("AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n".to_string(), commands[2]);
 }
@@ -774,6 +831,35 @@ fn test_receive_no_data_available() {
 }
 
 #[test]
+fn test_receive_after_restart() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    // Fake available data
+    adapter.client.add_urc_message(b"+IPD,0,256\r\n");
+    adapter.process_urc_messages();
+
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+    adapter.restart().unwrap();
+
+    let mut buffer = [0x0; 32];
+    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
+
+    // Assert that available data is reset on restart
+    assert_eq!([0x0; 32], buffer);
+    assert_eq!(nb::Error::WouldBlock, error);
+}
+
+#[test]
 fn test_receive_receive_command_failed() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
@@ -965,7 +1051,7 @@ fn test_receive_data_received_buffer_overflow() {
 }
 
 #[test]
-fn test_closed_socket_not_connected_yet() {
+fn test_close_socket_not_connected_yet() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -988,7 +1074,7 @@ fn test_closed_socket_not_connected_yet() {
 }
 
 #[test]
-fn test_closed_socket_already_closed_by_remote() {
+fn test_close_socket_already_closed_by_remote() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1009,7 +1095,59 @@ fn test_closed_socket_already_closed_by_remote() {
 }
 
 #[test]
-fn test_closed_socket_command_error() {
+fn test_close_open_socket() {
+    let timer = MockTimer::new();
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+
+    // Receiving socket
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+
+    adapter.client.reset_captured_commands();
+    adapter.close(socket).unwrap();
+
+    // Socket is available for reuse
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+
+    // Asserts that no close command is sent
+    let commands = adapter.client.get_commands_as_strings();
+    assert!(commands.is_empty());
+}
+
+#[test]
+fn test_close_after_restart() {
+    let mut timer = MockTimer::new();
+    timer.expect_start().times(1).returning(|_| Ok(()));
+    timer
+        .expect_wait()
+        .times(1)
+        .returning(|| nb::Result::Err(nb::Error::WouldBlock));
+
+    let client = MockAtatClient::new();
+    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let socket = connect_socket(&mut adapter);
+
+    // Response to RST command
+    adapter.client.add_ok_response();
+    adapter.client.add_urc_ready();
+    adapter.restart().unwrap();
+
+    adapter.client.reset_captured_commands();
+    adapter.close(socket).unwrap();
+
+    // Asserts that no close command is sent
+    assert!(adapter.client.get_commands_as_strings().is_empty());
+
+    // Socket is available for reuse
+    adapter.client.add_ok_response();
+    let socket = adapter.socket().unwrap();
+    assert_eq!(0, socket.link_id);
+}
+
+#[test]
+fn test_close_socket_command_error() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1025,7 +1163,7 @@ fn test_closed_socket_command_error() {
 }
 
 #[test]
-fn test_closed_socket_command_would_block() {
+fn test_close_socket_command_would_block() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1041,7 +1179,7 @@ fn test_closed_socket_command_would_block() {
 }
 
 #[test]
-fn test_closed_socket_unconfirmed() {
+fn test_close_socket_unconfirmed() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
@@ -1057,7 +1195,7 @@ fn test_closed_socket_unconfirmed() {
 }
 
 #[test]
-fn test_closed_socket_closed_successfully() {
+fn test_close_socket_closed_successfully() {
     let timer = MockTimer::new();
     let client = MockAtatClient::new();
     let mut adapter: AdapterType = Adapter::new(client, timer);
