@@ -3,7 +3,7 @@ use core::fmt::Write;
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
-use crate::wifi::{AddressErrors, JoinError, RestartErrors};
+use crate::wifi::{AddressErrors, CommandError, JoinError};
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
 use atat::{AtatCmd, Error as AtError, InternalError};
@@ -48,6 +48,32 @@ impl CommandErrorHandler for WifiModeCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         JoinError::ModeError(error)
+    }
+}
+
+/// Enables/Disables auto connect, so that ESP-AT automatically connects to the stored AP when powered on.
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CWAUTOCONN", NoResponse, timeout_ms = 1_000)]
+pub struct AutoConnectCommand {
+    /// 1: Enables auto connect, 0: Disables auto connect
+    mode: usize,
+}
+
+impl AutoConnectCommand {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            mode: usize::from(enabled),
+        }
+    }
+}
+
+impl CommandErrorHandler for AutoConnectCommand {
+    type Error = CommandError;
+
+    const WOULD_BLOCK_ERROR: Self::Error = CommandError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        CommandError::CommandFailed(error)
     }
 }
 
@@ -352,11 +378,11 @@ impl CommandErrorHandler for CloseSocketCommand {
 pub struct RestartCommand {}
 
 impl CommandErrorHandler for RestartCommand {
-    type Error = RestartErrors;
-    const WOULD_BLOCK_ERROR: Self::Error = RestartErrors::UnexpectedWouldBlock;
+    type Error = CommandError;
+    const WOULD_BLOCK_ERROR: Self::Error = CommandError::UnexpectedWouldBlock;
 
     fn command_error(&self, error: AtError) -> Self::Error {
-        RestartErrors::CommandError(error)
+        CommandError::CommandFailed(error)
     }
 }
 
