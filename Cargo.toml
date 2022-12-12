@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/esp-at-nal"
 
 [dependencies]
-atat = "0.17.0"
+atat = "0.18.0"
 embedded-nal = "0.6.0"
 nb = "1.0.0"
 fugit = "0.3.6"
