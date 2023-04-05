@@ -43,6 +43,7 @@ use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
 use heapless::String;
+use log::debug;
 use nb::Error;
 
 /// Wifi network adapter trait
@@ -134,6 +135,8 @@ pub(crate) struct Session<const RX_SIZE: usize> {
 impl<const RX_SIZE: usize> Session<RX_SIZE> {
     /// Handles a single URC message
     pub(crate) fn handle_urc(&mut self, message: URCMessages<RX_SIZE>) {
+        debug!("Handling parsed URC {message:?}");
+
         match message {
             URCMessages::WifiDisconnected => {
                 self.joined = false;

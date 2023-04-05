@@ -5,6 +5,7 @@
 use atat::digest::ParseError;
 use atat::{AtatUrc, Parser};
 use heapless::Vec;
+use log::debug;
 
 /// URC definitions, needs to passed as generic of [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`
 #[derive(Debug, PartialEq, Eq)]
@@ -122,6 +123,8 @@ impl<const RX_SIZE: usize> URCMessages<RX_SIZE> {
 
 impl<const RX_SIZE: usize> Parser for URCMessages<RX_SIZE> {
     fn parse(buf: &[u8]) -> Result<(&[u8], usize), ParseError> {
+        debug!("Parsing URC buffer {buf:?}");
+
         if buf.len() < 6 {
             return Err(ParseError::Incomplete);
         }
