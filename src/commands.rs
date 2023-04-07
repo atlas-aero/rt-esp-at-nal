@@ -107,13 +107,29 @@ impl CommandErrorHandler for AccessPointConnectCommand {
 }
 
 /// Command for receiving local address information including IP and MAC
-#[derive(Clone, AtatCmd)]
-#[at_cmd("+CIFSR", Vec<LocalAddressResponse, 4>, timeout_ms = 5_000)]
+#[derive(Clone)]
 pub struct ObtainLocalAddressCommand {}
 
 impl ObtainLocalAddressCommand {
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl AtatCmd<10> for ObtainLocalAddressCommand {
+    type Response = Vec<LocalAddressResponse, 4>;
+    const MAX_TIMEOUT_MS: u32 = 5_000;
+
+    fn as_bytes(&self) -> Vec<u8, 10> {
+        Vec::from_slice("AT+CIFSR\r\n".as_bytes()).unwrap()
+    }
+
+    fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtError> {
+        if resp.is_err() {
+            return Err(AtError::InvalidResponse);
+        }
+
+        atat::serde_at::from_slice::<Vec<LocalAddressResponse, 4>>(resp.unwrap()).map_err(|_| AtError::Parse)
     }
 }
 
