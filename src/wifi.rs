@@ -154,7 +154,6 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
                 }
             }
             URCMessages::Data(data) => self.data = Some(data),
-            URCMessages::Echo => {}
             URCMessages::Unknown => {}
         }
     }

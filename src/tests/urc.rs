@@ -1,12 +1,5 @@
-use crate::commands::{
-    AccessPointConnectCommand, ConnectCommand, ObtainLocalAddressCommand, SetMultipleConnectionsCommand,
-    SetSocketReceivingModeCommand, TransmissionPrepareCommand, WifiModeCommand,
-};
 use crate::urc::URCMessages;
-use atat::heapless::String;
-use atat::{AtatCmd, AtatUrc, Parser};
-use core::str::FromStr;
-use embedded_nal::SocketAddrV4;
+use atat::{AtatUrc, Parser};
 use heapless::Vec;
 
 #[test]
@@ -307,23 +300,6 @@ fn test_second_parse_longer_then_block_size() {
     assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").is_none())
 }
 
-#[test]
-fn test_matching_cmd_echo() {
-    assert_cmd_echo_matching(WifiModeCommand::station_mode());
-    assert_cmd_echo_matching(SetSocketReceivingModeCommand::passive_mode());
-    assert_cmd_echo_matching(SetMultipleConnectionsCommand::multiple());
-    assert_cmd_echo_matching(AccessPointConnectCommand::new(
-        String::from_str("test_network").unwrap(),
-        String::from_str("secret").unwrap(),
-    ));
-    assert_cmd_echo_matching(TransmissionPrepareCommand::new(0, 8));
-    assert_cmd_echo_matching(ConnectCommand::tcp_v4(
-        0,
-        SocketAddrV4::from_str("10.0.0.1:5000").unwrap(),
-    ));
-    assert_cmd_echo_matching(ObtainLocalAddressCommand::new());
-}
-
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {
     match <URCMessages<32> as Parser>::parse(data) {
         Ok(result) => {
@@ -334,20 +310,4 @@ fn assert_result(string: &[u8], size: usize, data: &[u8]) {
             panic!("Parsed failed");
         }
     }
-}
-
-/// Asserts that command echo is matched
-fn assert_cmd_echo_matching<Cmd: AtatCmd<LEN>, const LEN: usize>(command: Cmd) {
-    let encoded = command.as_bytes();
-
-    // Assert that first parser ist matching
-    assert_result(encoded.as_slice(), encoded.len(), encoded.as_slice());
-
-    // Assert that echo gets converted to Unknown URC
-    assert_eq!(
-        URCMessages::Echo,
-        <URCMessages<32> as AtatUrc>::parse(encoded.as_slice()).unwrap(),
-        "Echo of command {} did not return URCMessages::Echo on second parser.",
-        core::str::from_utf8(encoded.as_slice()).unwrap()
-    );
 }
