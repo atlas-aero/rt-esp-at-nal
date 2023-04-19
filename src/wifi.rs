@@ -154,7 +154,6 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
                 }
             }
             URCMessages::Data(data) => self.data = Some(data),
-            URCMessages::Echo => {}
             URCMessages::Unknown => {}
         }
     }
@@ -260,7 +259,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
-        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
+        let responses = self.send_command::<_, 10>(ObtainLocalAddressCommand::new())?;
         LocalAddress::from_responses(responses)
     }
 

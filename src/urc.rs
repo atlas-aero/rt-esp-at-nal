@@ -34,8 +34,6 @@ pub enum URCMessages<const RX_SIZE: usize> {
     DataAvailable(usize, usize),
     /// Received the following data requested by CIPRECVDATA command.
     Data(Vec<u8, RX_SIZE>),
-    /// Echo of a command
-    Echo,
     /// Unknown URC message
     Unknown,
 }
@@ -44,11 +42,6 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
     type Response = Self;
 
     fn parse(resp: &[u8]) -> Option<Self::Response> {
-        // Command echo
-        if &resp[..3] == b"AT+" {
-            return Some(Self::Echo);
-        }
-
         if &resp[..4] == b"+IPD" {
             return URCMessages::parse_data_available(resp);
         }
@@ -220,7 +213,6 @@ impl<'a> LineBasedMatcher<'a> {
     /// True if a regular CRLF terminated URC message was matched
     fn matches_lines_based_urc(&self, line: &str) -> bool {
         line == "ready"
-            || &line[..3] == "AT+"
             || &line[..4] == "+IPD"
             || line == "SEND OK"
             || line == "SEND FAIL"
