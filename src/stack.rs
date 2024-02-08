@@ -39,7 +39,7 @@ use crate::commands::{
 use crate::wifi::Adapter;
 use atat::AtatClient;
 use atat::Error as AtError;
-use embedded_nal::{SocketAddr, TcpClientStack};
+use embedded_nal::{SocketAddr, TcpClientStack, TcpError, TcpErrorKind};
 use fugit_timer::Timer;
 use heapless::Vec;
 
@@ -124,6 +124,15 @@ pub enum Error {
     TimerError,
 }
 
+impl TcpError for Error {
+    fn kind(&self) -> TcpErrorKind {
+        match self {
+            Error::ClosingSocket => TcpErrorKind::PipeClosed,
+            _ => TcpErrorKind::Other,
+        }
+    }
+}
+
 impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> TcpClientStack
     for Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
@@ -174,13 +183,6 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
         self.data_available[socket.link_id] = 0;
         nb::Result::Ok(())
-    }
-
-    /// Returns true if the socket is currently connected. Connection aborts by the remote side are also taken into account.
-    /// The current implementation never returns a Error.
-    fn is_connected(&mut self, socket: &Self::TcpSocket) -> Result<bool, Self::Error> {
-        self.process_urc_messages();
-        Ok(self.sockets[socket.link_id] == SocketState::Connected)
     }
 
     /// Sends the given buffer and returns the length (in bytes) sent.
@@ -259,6 +261,13 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
     Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
 {
+    /// Returns true if the socket is currently connected. Connection aborts by the remote side are also taken into account.
+    /// The current implementation never returns a Error.
+    pub fn is_connected(&mut self, socket: &Socket) -> Result<bool, Error> {
+        self.process_urc_messages();
+        Ok(self.sockets[socket.link_id] == SocketState::Connected)
+    }
+
     /// Sends a chunk of max. 256 bytes
     fn send_chunk(&mut self, data: &[u8]) -> Result<(), Error> {
         self.send_confirmed = None;
