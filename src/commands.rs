@@ -3,7 +3,7 @@ use core::fmt::Write;
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
-use crate::wifi::{AddressErrors, JoinError};
+use crate::wifi::{AddressErrors, CommandError, JoinError};
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
 use atat::{AtatCmd, Error as AtError, InternalError};
@@ -51,6 +51,32 @@ impl CommandErrorHandler for WifiModeCommand {
     }
 }
 
+/// Enables/Disables auto connect, so that ESP-AT automatically connects to the stored AP when powered on.
+#[derive(Clone, AtatCmd)]
+#[at_cmd("+CWAUTOCONN", NoResponse, timeout_ms = 1_000)]
+pub struct AutoConnectCommand {
+    /// 1: Enables auto connect, 0: Disables auto connect
+    mode: usize,
+}
+
+impl AutoConnectCommand {
+    pub fn new(enabled: bool) -> Self {
+        Self {
+            mode: usize::from(enabled),
+        }
+    }
+}
+
+impl CommandErrorHandler for AutoConnectCommand {
+    type Error = CommandError;
+
+    const WOULD_BLOCK_ERROR: Self::Error = CommandError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        CommandError::CommandFailed(error)
+    }
+}
+
 /// Command for setting the target WIFI access point parameters
 #[derive(Clone, Default, AtatCmd)]
 #[at_cmd("+CWJAP", NoResponse, timeout_ms = 20_000)]
@@ -81,13 +107,29 @@ impl CommandErrorHandler for AccessPointConnectCommand {
 }
 
 /// Command for receiving local address information including IP and MAC
-#[derive(Clone, AtatCmd)]
-#[at_cmd("+CIFSR", Vec<LocalAddressResponse, 4>, timeout_ms = 5_000)]
+#[derive(Clone)]
 pub struct ObtainLocalAddressCommand {}
 
 impl ObtainLocalAddressCommand {
     pub fn new() -> Self {
         Self {}
+    }
+}
+
+impl AtatCmd<10> for ObtainLocalAddressCommand {
+    type Response = Vec<LocalAddressResponse, 4>;
+    const MAX_TIMEOUT_MS: u32 = 5_000;
+
+    fn as_bytes(&self) -> Vec<u8, 10> {
+        Vec::from_slice("AT+CIFSR\r\n".as_bytes()).unwrap()
+    }
+
+    fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtError> {
+        if resp.is_err() {
+            return Err(AtError::InvalidResponse);
+        }
+
+        atat::serde_at::from_slice::<Vec<LocalAddressResponse, 4>>(resp.unwrap()).map_err(|_| AtError::Parse)
     }
 }
 
@@ -343,6 +385,20 @@ impl CommandErrorHandler for CloseSocketCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         StackError::CloseError(error)
+    }
+}
+
+/// Restarts the module
+#[derive(Clone, Default, AtatCmd)]
+#[at_cmd("+RST", NoResponse, timeout_ms = 1_000)]
+pub struct RestartCommand {}
+
+impl CommandErrorHandler for RestartCommand {
+    type Error = CommandError;
+    const WOULD_BLOCK_ERROR: Self::Error = CommandError::UnexpectedWouldBlock;
+
+    fn command_error(&self, error: AtError) -> Self::Error {
+        CommandError::CommandFailed(error)
     }
 }
 

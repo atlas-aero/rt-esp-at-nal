@@ -29,11 +29,11 @@
 //! assert_eq!("10.0.0.181", address.ipv4.unwrap().to_string());
 //! ````
 use crate::commands::{
-    AccessPointConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, SetSocketReceivingModeCommand,
-    WifiModeCommand,
+    AccessPointConnectCommand, AutoConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, RestartCommand,
+    SetSocketReceivingModeCommand, WifiModeCommand,
 };
 use crate::responses::LocalAddressResponse;
-use crate::stack::SocketState;
+use crate::stack::{ConnectionState, SocketState};
 use crate::urc::URCMessages;
 use atat::heapless::Vec;
 use atat::{AtatClient, AtatCmd, Error as AtError};
@@ -43,6 +43,7 @@ use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
 use heapless::String;
+use nb::Error;
 
 /// Wifi network adapter trait
 pub trait WifiAdapter {
@@ -52,6 +53,12 @@ pub trait WifiAdapter {
     /// Error when receiving local address information
     type AddressError: Debug;
 
+    /// Errors for configuration commands
+    type ConfigurationErrors: Debug;
+
+    /// Errors when restarting the module
+    type RestartError: Debug;
+
     /// Connects to an WIFI access point and returns the connection state
     fn join(&mut self, ssid: &str, key: &str) -> Result<JoinState, Self::JoinError>;
 
@@ -60,6 +67,12 @@ pub trait WifiAdapter {
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, Self::AddressError>;
+
+    /// Enables/Disables auto connect, so that ESP-AT whether automatically joins to the stored AP when powered on.
+    fn set_auto_connect(&mut self, enabled: bool) -> Result<(), Self::ConfigurationErrors>;
+
+    /// Restarts the module and blocks until ready
+    fn restart(&mut self) -> Result<(), Self::RestartError>;
 }
 
 /// Central client for network communication
@@ -78,11 +91,21 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
     /// Timeout for data transmission
     pub(crate) send_timeout: TimerDurationU32<TIMER_HZ>,
 
+    /// Network state
+    pub(crate) session: Session<RX_SIZE>,
+}
+
+/// Collection of network state
+#[derive(Default)]
+pub(crate) struct Session<const RX_SIZE: usize> {
     /// Currently joined to WIFI network? Gets updated by URC messages.
     joined: bool,
 
     /// True if an IP was assigned by access point. Get updated by URC message.
     ip_assigned: bool,
+
+    /// True if a URC ready message arrived.
+    ready: bool,
 
     /// True if multiple connections have been enabled
     pub(crate) multi_connections_enabled: bool,
@@ -92,9 +115,6 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
 
     /// Current socket states, array index = link_id
     pub(crate) sockets: [SocketState; 5],
-
-    /// Data length available to receive which is buffered by ESP-AT. Array index = link_id
-    pub(crate) data_available: [usize; 5],
 
     /// Received byte count confirmed by URC message. Gets reset to NONE by 'send()' method
     pub(crate) recv_byte_count: Option<usize>,
@@ -109,6 +129,34 @@ pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const
 
     /// Received socket data by URC message
     pub(crate) data: Option<Vec<u8, RX_SIZE>>,
+}
+
+impl<const RX_SIZE: usize> Session<RX_SIZE> {
+    /// Handles a single URC message
+    pub(crate) fn handle_urc(&mut self, message: URCMessages<RX_SIZE>) {
+        match message {
+            URCMessages::WifiDisconnected => {
+                self.joined = false;
+                self.ip_assigned = false;
+            }
+            URCMessages::ReceivedIP => self.ip_assigned = true,
+            URCMessages::WifiConnected => self.joined = true,
+            URCMessages::Ready => self.ready = true,
+            URCMessages::SocketConnected(link_id) => self.sockets[link_id].state = ConnectionState::Connected,
+            URCMessages::SocketClosed(link_id) => self.sockets[link_id].state = ConnectionState::Closing,
+            URCMessages::AlreadyConnected => self.already_connected = true,
+            URCMessages::ReceivedBytes(count) => self.recv_byte_count = Some(count),
+            URCMessages::SendConfirmation => self.send_confirmed = Some(true),
+            URCMessages::SendFail => self.send_confirmed = Some(false),
+            URCMessages::DataAvailable(link_id, length) => {
+                if link_id < self.sockets.len() {
+                    self.sockets[link_id].data_available = length;
+                }
+            }
+            URCMessages::Data(data) => self.data = Some(data),
+            URCMessages::Unknown => {}
+        }
+    }
 }
 
 /// Possible errors when joining an access point
@@ -148,6 +196,23 @@ pub enum AddressErrors {
     UnexpectedWouldBlock,
 }
 
+/// General errors for simple commands (e.g. enabling a configuration flag)
+#[derive(Clone, Debug, PartialEq)]
+pub enum CommandError {
+    /// Command failed with the given upstream error
+    CommandFailed(AtError),
+
+    /// No ready message received within timout (5 seconds)
+    ReadyTimeout,
+
+    /// Upstream timer error
+    TimerError,
+
+    /// Received an unexpected WouldBlock. The most common cause of errors is an incorrect mode of the client.
+    /// This must be either timeout or blocking.
+    UnexpectedWouldBlock,
+}
+
 /// Current WIFI connection state
 #[derive(Copy, Clone, Debug)]
 pub struct JoinState {
@@ -163,6 +228,8 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 {
     type JoinError = JoinError;
     type AddressError = AddressErrors;
+    type ConfigurationErrors = CommandError;
+    type RestartError = CommandError;
 
     /// Connects to an WIFI access point and returns the connection state
     ///
@@ -176,8 +243,8 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         self.process_urc_messages();
 
         Ok(JoinState {
-            connected: self.joined,
-            ip_assigned: self.ip_assigned,
+            connected: self.session.joined,
+            ip_assigned: self.session.ip_assigned,
         })
     }
 
@@ -185,15 +252,46 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     fn get_join_status(&mut self) -> JoinState {
         self.process_urc_messages();
         JoinState {
-            connected: self.joined,
-            ip_assigned: self.ip_assigned,
+            connected: self.session.joined,
+            ip_assigned: self.session.ip_assigned,
         }
     }
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
-        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
+        let responses = self.send_command::<_, 10>(ObtainLocalAddressCommand::new())?;
         LocalAddress::from_responses(responses)
+    }
+
+    /// Enables auto connect, so that ESP-AT automatically connects to the stored AP when powered on.
+    fn set_auto_connect(&mut self, enabled: bool) -> Result<(), CommandError> {
+        self.send_command(AutoConnectCommand::new(enabled))?;
+        Ok(())
+    }
+
+    /// Restarts the module and blocks until the module is ready.
+    /// If module is not ready within five seconds, [CommandError::ReadyTimeout] is returned
+    fn restart(&mut self) -> Result<(), CommandError> {
+        self.session.ready = false;
+        self.send_command(RestartCommand::default())?;
+
+        self.session = Session::default();
+
+        self.timer.start(5.secs()).map_err(|_| CommandError::TimerError)?;
+        while !self.session.ready {
+            if let nb::Result::Err(error) = self.timer.wait() {
+                match error {
+                    Error::Other(_) => return Err(CommandError::TimerError),
+                    Error::WouldBlock => {}
+                }
+            } else {
+                return Err(CommandError::ReadyTimeout);
+            }
+
+            self.process_urc_messages();
+        }
+
+        Ok(())
     }
 }
 
@@ -206,54 +304,18 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             client,
             timer,
             send_timeout: 5_000.millis(),
-            joined: false,
-            ip_assigned: false,
-            multi_connections_enabled: false,
-            passive_mode_enabled: false,
-            sockets: [SocketState::Closed; 5],
-            data_available: [0; 5],
-            recv_byte_count: None,
-            send_confirmed: None,
-            already_connected: false,
-            data: None,
+            session: Session::default(),
         }
     }
 
     /// Processes all pending messages in the queue
     pub(crate) fn process_urc_messages(&mut self) {
         while let Some(message) = self.client.check_urc::<URCMessages<RX_SIZE>>() {
-            self.handle_urc(message)
+            self.session.handle_urc(message)
         }
 
         // Avoid full response queue, which gets full for a unknown reason
         let _ = self.client.check_response(&SetSocketReceivingModeCommand::passive_mode());
-    }
-
-    /// Handles a single URC message
-    pub(crate) fn handle_urc(&mut self, message: URCMessages<RX_SIZE>) {
-        match message {
-            URCMessages::WifiDisconnected => {
-                self.joined = false;
-                self.ip_assigned = false;
-            }
-            URCMessages::ReceivedIP => self.ip_assigned = true,
-            URCMessages::WifiConnected => self.joined = true,
-            URCMessages::Ready => {}
-            URCMessages::SocketConnected(link_id) => self.sockets[link_id] = SocketState::Connected,
-            URCMessages::SocketClosed(link_id) => self.sockets[link_id] = SocketState::Closing,
-            URCMessages::AlreadyConnected => self.already_connected = true,
-            URCMessages::ReceivedBytes(count) => self.recv_byte_count = Some(count),
-            URCMessages::SendConfirmation => self.send_confirmed = Some(true),
-            URCMessages::SendFail => self.send_confirmed = Some(false),
-            URCMessages::DataAvailable(link_id, length) => {
-                if link_id < self.sockets.len() {
-                    self.data_available[link_id] = length;
-                }
-            }
-            URCMessages::Data(data) => self.data = Some(data),
-            URCMessages::Echo => {}
-            URCMessages::Unknown => {}
-        }
     }
 
     /// Sends the command for switching to station mode
