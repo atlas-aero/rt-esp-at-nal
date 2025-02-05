@@ -314,7 +314,7 @@ impl<'a> TransmissionCommand<'a> {
     }
 }
 
-impl<'a, const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'a> {
+impl<const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'_> {
     type Response = NoResponse;
 
     const MAX_TIMEOUT_MS: u32 = 5000;
@@ -329,7 +329,7 @@ impl<'a, const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'a> {
     }
 }
 
-impl<'a> CommandErrorHandler for TransmissionCommand<'a> {
+impl CommandErrorHandler for TransmissionCommand<'_> {
     type Error = StackError;
     const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
 

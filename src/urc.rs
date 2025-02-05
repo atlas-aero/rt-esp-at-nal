@@ -285,7 +285,7 @@ struct DataMessage<'a> {
     pub data: &'a [u8],
 }
 
-impl<'a> DataMessage<'a> {
+impl DataMessage<'_> {
     /// Copies all serial data to a vector
     fn to_vec<const LEN: usize>(&self) -> Option<Vec<u8, LEN>> {
         let mut vec = Vec::new();
