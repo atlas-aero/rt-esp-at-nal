@@ -10,7 +10,7 @@
 //!
 //! ````
 //! # use core::str::FromStr;
-//! # use embedded_nal::{SocketAddr, TcpClientStack};
+//! # use embedded_nal::{TcpClientStack};
 //! # use esp_at_nal::example::ExampleTimer;
 //! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
@@ -38,8 +38,8 @@ use crate::urc::URCMessages;
 use atat::heapless::Vec;
 use atat::{AtatClient, AtatCmd, Error as AtError};
 use core::fmt::Debug;
+use core::net::{Ipv4Addr, Ipv6Addr};
 use core::str::FromStr;
-use embedded_nal::{Ipv4Addr, Ipv6Addr};
 use fugit::{ExtU32, TimerDurationU32};
 use fugit_timer::Timer;
 use heapless::String;

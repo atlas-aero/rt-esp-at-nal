@@ -1,5 +1,3 @@
-use core::fmt::Write;
-
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
@@ -7,7 +5,8 @@ use crate::wifi::{AddressErrors, CommandError, JoinError};
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
 use atat::{AtatCmd, Error as AtError, InternalError};
-use embedded_nal::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use core::fmt::Write;
+use core::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use numtoa::NumToA;
 
 const MAX_IP_LENGTH: usize = 39; // IPv4: 15, IPv6: 39
@@ -404,7 +403,7 @@ impl CommandErrorHandler for RestartCommand {
 
 #[cfg(test)]
 mod tests {
-    use embedded_nal::{Ipv4Addr, Ipv6Addr};
+    use core::net::{Ipv4Addr, Ipv6Addr};
     use heapless::String;
 
     use super::MAX_IP_LENGTH;

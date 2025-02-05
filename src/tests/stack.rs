@@ -4,8 +4,9 @@ use crate::wifi::{Adapter, WifiAdapter};
 use alloc::string::{String, ToString};
 use alloc::vec;
 use atat::Error as AtError;
+use core::net::SocketAddr;
 use core::str::FromStr;
-use embedded_nal::{SocketAddr, TcpClientStack};
+use embedded_nal::TcpClientStack;
 
 type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 4>;
 

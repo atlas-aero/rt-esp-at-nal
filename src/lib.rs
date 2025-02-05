@@ -15,7 +15,8 @@
 //!
 //! ````
 //! use core::str::FromStr;
-//! use embedded_nal::{SocketAddr, TcpClientStack};
+//! use core::net::SocketAddr;
+//! use embedded_nal::{TcpClientStack};
 //! use esp_at_nal::example::ExampleTimer;
 //! use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! use crate::esp_at_nal::example::ExampleAtClient as AtClient;

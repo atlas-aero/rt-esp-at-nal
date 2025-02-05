@@ -8,7 +8,8 @@
 //!
 //! ````
 //! # use core::str::FromStr;
-//! # use embedded_nal::{SocketAddr, TcpClientStack};
+//! # use core::net::SocketAddr;
+//! # use embedded_nal::{TcpClientStack};
 //! # use esp_at_nal::example::ExampleTimer;
 //! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
@@ -32,6 +33,7 @@
 //! // Closing socket
 //! adapter.close(socket).unwrap();
 //! ````
+
 use crate::commands::{
     CloseSocketCommand, ConnectCommand, ReceiveDataCommand, SetMultipleConnectionsCommand,
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
@@ -39,7 +41,8 @@ use crate::commands::{
 use crate::wifi::{Adapter, Session};
 use atat::AtatClient;
 use atat::Error as AtError;
-use embedded_nal::{SocketAddr, TcpClientStack, TcpError, TcpErrorKind};
+use core::net::SocketAddr;
+use embedded_nal::{TcpClientStack, TcpError, TcpErrorKind};
 use fugit_timer::Timer;
 use heapless::Vec;
 
