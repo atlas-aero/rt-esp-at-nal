@@ -73,7 +73,7 @@ impl AtatClient for MockAtatClient<'_> {
                 expected,
                 &buffer[..length],
                 "Expected command {} differs from actual command {}",
-                core::str::from_utf8(&expected).unwrap(),
+                core::str::from_utf8(expected).unwrap(),
                 core::str::from_utf8(&buffer[..length]).unwrap()
             );
         }
