@@ -1,151 +1,114 @@
+use crate::urc::URCMessages;
 use alloc::collections::VecDeque;
-use alloc::vec;
-use alloc::vec::Vec;
-use atat::{AtatClient, AtatCmd, AtatUrc, Error, Mode};
+use atat::blocking::AtatClient;
+use atat::{AtatCmd, AtatUrc, Error};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::{PubSubChannel, Publisher};
 use fugit::{TimerDurationU32, TimerInstantU32};
 use fugit_timer::Timer as FugitTimer;
 use mockall::mock;
 
-/// Custom mock for [AtatClient], as mockall crate is currently not supportint the trait structure
+/// Custom mock for [AtatClient], as mockall crate is currently not supporting the trait structure
 /// due to generic const + generic closure (s. [https://github.com/asomers/mockall/issues/217]
-pub struct MockAtatClient {
-    /// Sent (encoded) commands
-    commands: Vec<Vec<u8>>,
-
+pub struct MockAtatClient<'a> {
     /// Mocked responses which get returned in the same order as inserted
-    responses: VecDeque<&'static [u8]>,
+    responses: VecDeque<MockedCommand>,
 
-    /// Mocked URC messages which get returned in the same order as inserted
-    urc_messages: VecDeque<&'static [u8]>,
-
-    /// Returns no URC messages on the first N calls
-    urc_skp_count: usize,
-
-    /// If true, only one URC message is returned for one check_urc() call
-    throttle_urc: bool,
-
-    /// If true, no more URC messages get returned until next send() call
-    throttle_urc_reached: bool,
-
-    /// send() call count
-    send_count: usize,
-
-    /// Call count of
-    reset_call_count: usize,
-
-    /// If false, calls to reset() will panic
-    expect_reset_call: bool,
-
-    /// Simulates a 'WouldBlock' response at given call index
-    send_would_block: Option<usize>,
+    /// Publisher for URC messages
+    urc_publisher: Publisher<'a, CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1>,
 }
 
-impl AtatClient for MockAtatClient {
-    fn send<A: AtatCmd<LEN>, const LEN: usize>(&mut self, cmd: &A) -> nb::Result<A::Response, Error> {
-        self.commands.push(cmd.as_bytes().to_vec());
+/// Mocked command behaviour
+pub struct MockedCommand {
+    /// Expected command, None if command should not be asserted
+    pub command: Option<&'static [u8]>,
 
-        if self.send_would_block.is_some() && self.send_would_block.as_ref().unwrap() == &self.send_count {
-            return nb::Result::Err(nb::Error::WouldBlock);
-        }
+    /// Sends the given response
+    pub response: &'static [u8],
 
-        let response = cmd
-            .parse(Ok(self.responses.pop_front().unwrap()))
-            .map_err(|_| nb::Error::Other(Error::Parse))?;
-
-        self.send_count += 1;
-        self.throttle_urc_reached = false;
-        nb::Result::Ok(response)
-    }
-
-    fn check_urc<URC: AtatUrc>(&mut self) -> Option<URC::Response> {
-        if self.urc_skp_count > 0 {
-            self.urc_skp_count -= 1;
-            return None;
-        }
-
-        let mut return_urc = None;
-        self.peek_urc_with::<URC, _>(|urc| {
-            return_urc = Some(urc);
-            true
-        });
-        return_urc
-    }
-
-    fn peek_urc_with<URC: AtatUrc, F: FnOnce(URC::Response) -> bool>(&mut self, f: F) {
-        if self.urc_messages.is_empty() {
-            return;
-        }
-
-        if self.throttle_urc && self.throttle_urc_reached {
-            return;
-        }
-
-        if self.throttle_urc {
-            self.throttle_urc_reached = true;
-        }
-
-        if let Some(message) = URC::parse(self.urc_messages.pop_front().unwrap()) {
-            f(message);
-        }
-    }
-
-    fn check_response<A: AtatCmd<LEN>, const LEN: usize>(&mut self, _cmd: &A) -> nb::Result<A::Response, Error> {
-        nb::Result::Err(nb::Error::WouldBlock)
-    }
-
-    fn get_mode(&self) -> Mode {
-        Mode::Timeout
-    }
-
-    fn reset(&mut self) {
-        if !self.expect_reset_call {
-            panic!("Unexpected call to reset()");
-        }
-
-        self.reset_call_count += 1;
-    }
+    /// Publishes the given URC message after the command is sent
+    pub urc_messages: Option<&'static [&'static [u8]]>,
 }
 
-impl MockAtatClient {
-    pub fn new() -> Self {
+impl MockedCommand {
+    pub fn new(
+        command: Option<&'static [u8]>,
+        response: &'static [u8],
+        urc_messages: Option<&'static [&'static [u8]]>,
+    ) -> Self {
         Self {
-            commands: vec![],
-            responses: VecDeque::new(),
-            urc_messages: VecDeque::new(),
-            urc_skp_count: 0,
-            throttle_urc: false,
-            throttle_urc_reached: false,
-            send_count: 0,
-            reset_call_count: 0,
-            expect_reset_call: false,
-            send_would_block: None,
+            command,
+            response,
+            urc_messages,
         }
     }
 
-    /// Simulates a 'WouldBlock' response at given call index
-    pub fn send_would_block(&mut self, call_index: usize) {
-        self.send_count = 0;
-        self.send_would_block = Some(call_index);
+    /// Simulates an error response
+    pub fn error(command: Option<&'static [u8]>, urc_messages: Option<&'static [&'static [u8]]>) -> Self {
+        Self::new(command, b"ERROR\r\n", urc_messages)
+    }
+
+    /// Simulates an empty OK response
+    pub fn ok(command: Option<&'static [u8]>, urc_messages: Option<&'static [&'static [u8]]>) -> Self {
+        Self::new(command, b"", urc_messages)
+    }
+}
+
+impl AtatClient for MockAtatClient<'_> {
+    fn send<A: AtatCmd>(&mut self, cmd: &A) -> Result<A::Response, Error> {
+        let mut buffer = [0x0_u8; 256];
+        let length = cmd.write(&mut buffer);
+
+        if self.responses.is_empty() {
+            panic!(
+                "Unexpected command {}",
+                core::str::from_utf8(&buffer[..length]).unwrap()
+            )
+        }
+
+        let behaviour = self.responses.pop_front().unwrap();
+
+        if let Some(expected) = behaviour.command {
+            assert_eq!(
+                expected,
+                &buffer[..length],
+                "Expected command {} differs from actual command {}",
+                core::str::from_utf8(&expected).unwrap(),
+                core::str::from_utf8(&buffer[..length]).unwrap()
+            );
+        }
+
+        let response = cmd.parse(Ok(behaviour.response)).map_err(|_| Error::Parse)?;
+
+        if let Some(messages) = behaviour.urc_messages {
+            for message in messages {
+                if let Some(message) = URCMessages::parse(message) {
+                    self.urc_publisher.try_publish(message).unwrap()
+                };
+            }
+        }
+
+        Ok(response)
+    }
+}
+
+impl<'a> MockAtatClient<'a> {
+    pub fn new(channel: &'a PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1>) -> Self {
+        Self {
+            responses: VecDeque::new(),
+            urc_publisher: channel.publisher().unwrap(),
+        }
     }
 
     /// Adds a mock response
-    pub fn add_response(&mut self, response: &'static [u8]) {
+    pub fn add_response(&mut self, response: MockedCommand) {
         self.responses.push_back(response);
     }
 
-    /// Simulates a general error response
-    pub fn add_error_response(&mut self) {
-        self.add_response(b"ERROR\r\n");
-    }
-
-    /// Simulates a none response (OK)
-    pub fn add_ok_response(&mut self) {
-        self.add_response(b"");
-    }
-
-    /// Adds a  mock URC message
+    /// Publishes a URC message
     pub fn add_urc_message(&mut self, message: &'static [u8]) {
-        self.urc_messages.push_back(message);
+        let message = URCMessages::parse(message).unwrap();
+        self.urc_publisher.try_publish(message).unwrap()
     }
 
     /// Simulates a 'WIFI CONNECTED' URC message
@@ -163,11 +126,6 @@ impl MockAtatClient {
         self.add_urc_message(b"WIFI GOT IP\r\n");
     }
 
-    /// Simulates a unknown URC message
-    pub fn add_urc_unknown(&mut self) {
-        self.add_urc_message(b"UNKNOWN\r\n");
-    }
-
     /// Simulates a 'ready' URC message
     pub fn add_urc_ready(&mut self) {
         self.add_urc_message(b"ready\r\n");
@@ -178,65 +136,16 @@ impl MockAtatClient {
         self.add_urc_message(b"0,CONNECT\r\n");
     }
 
-    /// Simulates a 'recv 4 bytes' URC message
-    pub fn add_urc_recv_bytes(&mut self) {
-        self.add_urc_message(b"Recv 4 bytes\r\n");
-    }
-
-    /// Simulates a 'SEND OK' URC message
-    pub fn add_urc_send_ok(&mut self) {
-        self.add_urc_message(b"SEND OK\r\n");
-    }
-
-    /// Simulates a 'SEND FAIL' URC message
-    pub fn add_urc_send_fail(&mut self) {
-        self.add_urc_message(b"SEND FAIL\r\n");
-    }
-
-    /// Simulates a connected socket state change
-    pub fn add_urc_second_socket_connected(&mut self) {
-        self.add_urc_message(b"1,CONNECT\r\n");
-    }
-
     /// Simulates a connected socket state change
     pub fn add_urc_first_socket_closed(&mut self) {
         self.add_urc_message(b"0,CLOSED\r\n");
     }
 
-    /// Skips the given number of calls to check_urc()
-    pub fn skip_urc(&mut self, count: usize) {
-        self.urc_skp_count = count;
-    }
-
-    /// If set, just one URC message is processed between send() calls
-    pub fn throttle_urc(&mut self) {
-        self.throttle_urc = true;
-    }
-
-    /// Returns a copy of the sent commands
-    pub fn get_commands_as_strings(&self) -> Vec<String> {
-        let mut commands = vec![];
-
-        for command in &self.commands {
-            commands.push(String::from_utf8(command.clone()).unwrap());
+    /// Asserts that there are no mocked commands left in the queue
+    pub fn assert_all_cmds_sent(&self) {
+        if !self.responses.is_empty() {
+            panic!("Not all expected commands have been sent.");
         }
-
-        commands
-    }
-
-    /// Expect calls to reset()
-    pub fn expect_reset_calls(&mut self) {
-        self.expect_reset_call = true;
-    }
-
-    /// Returns the call count of reset() method
-    pub fn get_reset_call_count(&self) -> usize {
-        self.reset_call_count
-    }
-
-    /// Resets the the captured sent commands
-    pub fn reset_captured_commands(&mut self) {
-        self.commands.clear();
     }
 }
 

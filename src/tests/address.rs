@@ -1,17 +1,26 @@
-use crate::tests::mock::{MockAtatClient, MockTimer};
+use crate::tests::mock::{MockAtatClient, MockTimer, MockedCommand};
+use crate::urc::URCMessages;
 use crate::wifi::WifiAdapter;
 use crate::wifi::{Adapter, AddressErrors};
 use alloc::string::ToString;
 use atat::Error as AtError;
-type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 64>;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
+
+type AdapterType<'a> = Adapter<'a, MockAtatClient<'a>, MockTimer, 1_000_000, 256, 16, 16>;
 
 #[test]
 fn test_all_addresses() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n",
+        urc_messages: None,
+    });
 
     let address = adapter.get_address().unwrap();
     assert_eq!("10:fe:ed:05:ba:50", address.mac.unwrap().as_str());
@@ -25,13 +34,16 @@ fn test_all_addresses() {
 
 #[test]
 fn test_ipv6_missing() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter
-        .client
-        .add_response(b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n",
+        urc_messages: None,
+    });
 
     let address = adapter.get_address().unwrap();
     assert_eq!("10:fe:ed:05:ba:50", address.mac.unwrap().as_str());
@@ -42,11 +54,16 @@ fn test_ipv6_missing() {
 
 #[test]
 fn test_ipv4_missing() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n",
+        urc_messages: None,
+    });
 
     let address = adapter.get_address().unwrap();
     assert_eq!("10:fe:ed:05:ba:50", address.mac.unwrap().as_str());
@@ -60,11 +77,16 @@ fn test_ipv4_missing() {
 
 #[test]
 fn test_missing_mac() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAIP6LL,\"fe80::e6ee:e64e:84c:a745\"\r\n+CIFSR:STAIP6GL,\"2a02:810d:1340:2df5:68e1:704d:4a72:656a\"\r\n",
+        urc_messages: None,
+    });
 
     let address = adapter.get_address().unwrap();
     assert!(address.mac.is_none());
@@ -78,13 +100,16 @@ fn test_missing_mac() {
 
 #[test]
 fn test_unknown_type() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter
-        .client
-        .add_response(b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:MAGCIC,\"123\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:MAGCIC,\"123\"\r\n",
+        urc_messages: None,
+    });
 
     let address = adapter.get_address().unwrap();
     assert_eq!("10.0.0.181", address.ipv4.unwrap().to_string());
@@ -95,66 +120,76 @@ fn test_unknown_type() {
 
 #[test]
 fn test_ipv4_parse_error() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP,\"10.0.0.0.1\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP,\"10.0.0.0.1\"\r\n",
+        urc_messages: None,
+    });
 
     assert_eq!(AddressErrors::AddressParseError, adapter.get_address().unwrap_err());
 }
 
 #[test]
 fn test_link_local_ipv6_parse_error() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP6LL,\"zzz\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP6LL,\"zzz\"\r\n",
+        urc_messages: None,
+    });
 
     assert_eq!(AddressErrors::AddressParseError, adapter.get_address().unwrap_err());
 }
 
 #[test]
 fn test_global_ipv6_parse_error() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAIP6GL,\"123\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAIP6GL,\"123\"\r\n",
+        urc_messages: None,
+    });
 
     assert_eq!(AddressErrors::AddressParseError, adapter.get_address().unwrap_err());
 }
 
 #[test]
 fn test_mac_to_long() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_response(b"+CIFSR:STAMAC,\"10:fe:ed:05:ba:50_\"\r\n");
+    adapter.client.add_response(MockedCommand {
+        command: Some(b"AT+CIFSR\r\n"),
+        response: b"+CIFSR:STAMAC,\"10:fe:ed:05:ba:50_\"\r\n",
+        urc_messages: None,
+    });
 
     assert_eq!(AddressErrors::AddressParseError, adapter.get_address().unwrap_err());
 }
 
 #[test]
-fn test_would_block() {
-    let client = MockAtatClient::new();
-    let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-
-    adapter.client.send_would_block(0);
-
-    assert_eq!(AddressErrors::UnexpectedWouldBlock, adapter.get_address().unwrap_err());
-}
-
-#[test]
 fn test_command_error() {
-    let client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
     let timer = MockTimer::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
-    adapter.client.add_error_response();
+    adapter.client.add_response(MockedCommand::error(Some(b"AT+CIFSR\r\n"), None));
 
     assert_eq!(
         AddressErrors::CommandError(AtError::Parse),

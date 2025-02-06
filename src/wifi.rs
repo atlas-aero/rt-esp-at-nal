@@ -15,8 +15,9 @@
 //! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
 //! #
-//! let client = AtClient::default();
-//! let mut adapter: Adapter<_, _, 1_000_000, 256, 256> = Adapter::new(client, ExampleTimer::default());
+//! let urc_channel = AtClient::urc_channel();
+//! let client = AtClient::init(&urc_channel);
+//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 128, 8> = Adapter::new(client, urc_channel.subscriber().unwrap(), ExampleTimer::default());
 //!
 //! // Setting target WIFI access point
 //! adapter.join("test_wifi", "secret").unwrap();
@@ -30,13 +31,14 @@
 //! ````
 use crate::commands::{
     AccessPointConnectCommand, AutoConnectCommand, CommandErrorHandler, ObtainLocalAddressCommand, RestartCommand,
-    SetSocketReceivingModeCommand, WifiModeCommand,
+    WifiModeCommand,
 };
 use crate::responses::LocalAddressResponse;
 use crate::stack::{ConnectionState, SocketState};
 use crate::urc::URCMessages;
+use atat::blocking::AtatClient;
 use atat::heapless::Vec;
-use atat::{AtatClient, AtatCmd, Error as AtError};
+use atat::{AtatCmd, Error as AtError, UrcSubscription};
 use core::fmt::Debug;
 use core::net::{Ipv4Addr, Ipv6Addr};
 use core::str::FromStr;
@@ -81,9 +83,22 @@ pub trait WifiAdapter {
 /// introduces also higher stack memory footprint. Max. value: 8192
 ///
 /// RX_SIZE: Chunk size in bytes when receiving data. Value should be matched to buffer size of `receive()` calls.
-pub struct Adapter<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> {
+///
+/// URC_CAPACITY: URC buffer size. It's the same value, as used when initializing the UrcChannel of atat
+pub struct Adapter<
+    'urc_sub,
+    A: AtatClient,
+    T: Timer<TIMER_HZ>,
+    const TIMER_HZ: u32,
+    const TX_SIZE: usize,
+    const RX_SIZE: usize,
+    const URC_CAPACITY: usize,
+> {
     /// ATAT client
     pub(crate) client: A,
+
+    /// URC message subscriber
+    pub(crate) urc_subscription: UrcSubscription<'urc_sub, URCMessages<RX_SIZE>, URC_CAPACITY, 1>,
 
     /// Timer used for timeout measurement
     pub(crate) timer: T,
@@ -223,8 +238,14 @@ pub struct JoinState {
     pub ip_assigned: bool,
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> WifiAdapter
-    for Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
+impl<
+        A: AtatClient,
+        T: Timer<TIMER_HZ>,
+        const TIMER_HZ: u32,
+        const TX_SIZE: usize,
+        const RX_SIZE: usize,
+        const URC_CAPACITY: usize,
+    > WifiAdapter for Adapter<'_, A, T, TIMER_HZ, TX_SIZE, RX_SIZE, URC_CAPACITY>
 {
     type JoinError = JoinError;
     type AddressError = AddressErrors;
@@ -259,7 +280,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
     /// Returns local address information
     fn get_address(&mut self) -> Result<LocalAddress, AddressErrors> {
-        let responses = self.send_command::<_, 10>(ObtainLocalAddressCommand::new())?;
+        let responses = self.send_command(ObtainLocalAddressCommand::new())?;
         LocalAddress::from_responses(responses)
     }
 
@@ -295,13 +316,25 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     }
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
-    Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
+impl<
+        'urc_sub,
+        A: AtatClient,
+        T: Timer<TIMER_HZ>,
+        const TIMER_HZ: u32,
+        const TX_SIZE: usize,
+        const RX_SIZE: usize,
+        const URC_CAPACITY: usize,
+    > Adapter<'urc_sub, A, T, TIMER_HZ, TX_SIZE, RX_SIZE, URC_CAPACITY>
 {
     /// Creates a new network adapter. Client needs to be in timeout or blocking mode
-    pub fn new(client: A, timer: T) -> Self {
+    pub fn new(
+        client: A,
+        urc_subscription: UrcSubscription<'urc_sub, URCMessages<RX_SIZE>, URC_CAPACITY, 1>,
+        timer: T,
+    ) -> Self {
         Self {
             client,
+            urc_subscription,
             timer,
             send_timeout: 5_000.millis(),
             session: Session::default(),
@@ -310,12 +343,9 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
     /// Processes all pending messages in the queue
     pub(crate) fn process_urc_messages(&mut self) {
-        while let Some(message) = self.client.check_urc::<URCMessages<RX_SIZE>>() {
+        while let Some(message) = self.urc_subscription.try_next_message_pure() {
             self.session.handle_urc(message)
         }
-
-        // Avoid full response queue, which gets full for a unknown reason
-        let _ = self.client.check_response(&SetSocketReceivingModeCommand::passive_mode());
     }
 
     /// Sends the command for switching to station mode
@@ -336,26 +366,18 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             return Err(JoinError::InvalidPasswordLength);
         }
 
-        let command = AccessPointConnectCommand::new(ssid.into(), key.into());
+        let command = AccessPointConnectCommand::new(String::from_str(ssid).unwrap(), String::from_str(key).unwrap());
         self.send_command(command)?;
 
         Ok(())
     }
 
     /// Sends a command and maps the error if the command failed
-    pub(crate) fn send_command<Cmd: AtatCmd<LEN> + CommandErrorHandler, const LEN: usize>(
+    pub(crate) fn send_command<Cmd: AtatCmd + CommandErrorHandler>(
         &mut self,
         command: Cmd,
     ) -> Result<Cmd::Response, Cmd::Error> {
-        let result = self.client.send(&command);
-        if let nb::Result::Err(error) = result {
-            return match error {
-                nb::Error::Other(other) => Err(command.command_error(other)),
-                nb::Error::WouldBlock => Err(Cmd::WOULD_BLOCK_ERROR),
-            };
-        }
-
-        Ok(result.unwrap())
+        self.client.send(&command).map_err(|e| command.command_error(e))
     }
 
     /// Sets the timeout for sending TCP data in ms
@@ -406,7 +428,10 @@ impl LocalAddress {
                         return Err(AddressErrors::AddressParseError);
                     }
 
-                    data.mac = Some(String::from(response.address.as_str()));
+                    data.mac = match String::from_str(response.address.as_str()) {
+                        Ok(string) => Some(string),
+                        Err(_) => None,
+                    };
                 }
                 &_ => {}
             }

@@ -1,66 +1,68 @@
 //! Mocks for doc examples
-use atat::{AtatClient, AtatCmd, AtatUrc, Error, Mode};
+use crate::urc::URCMessages;
+use atat::blocking::AtatClient;
+use atat::{AtatCmd, AtatUrc, Error};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::{PubSubChannel, Publisher};
 use fugit::{TimerDurationU32, TimerInstantU32};
 use fugit_timer::Timer;
-use heapless::Deque;
 
 /// ATAT client mock
-#[derive(Default)]
-pub struct ExampleAtClient {
-    /// Static URC messages
-    urc_messages: Deque<&'static str, 2>,
+pub struct ExampleAtClient<'a> {
+    /// URC publisher used for statically mocking URC messages
+    urc_publisher: Publisher<'a, CriticalSectionRawMutex, URCMessages<128>, 8, 1, 1>,
 }
 
-impl AtatClient for ExampleAtClient {
-    fn send<A: AtatCmd<LEN>, const LEN: usize>(&mut self, cmd: &A) -> nb::Result<A::Response, Error> {
-        match cmd.as_bytes().as_slice() {
+impl<'a> ExampleAtClient<'a> {
+    pub fn urc_channel() -> PubSubChannel<CriticalSectionRawMutex, URCMessages<128>, 8, 1, 1> {
+        PubSubChannel::new()
+    }
+
+    pub fn init(channel: &'a PubSubChannel<CriticalSectionRawMutex, URCMessages<128>, 8, 1, 1>) -> Self {
+        Self {
+            urc_publisher: channel.publisher().unwrap(),
+        }
+    }
+
+    fn publish_urc(&self, message: &[u8]) {
+        let message = URCMessages::parse(message).unwrap();
+        self.urc_publisher.try_publish(message).unwrap();
+    }
+}
+
+impl AtatClient for ExampleAtClient<'_> {
+    fn send<A: AtatCmd>(&mut self, cmd: &A) -> Result<A::Response, Error> {
+        let mut buffer = [0x0; 128];
+        let length = cmd.write(&mut buffer);
+
+        match &buffer[..length] {
             b"AT+CWJAP=\"test_wifi\",\"secret\"\r\n" => {
-                self.urc_messages.push_back("WIFI CONNECTED\r\n").unwrap();
-                self.urc_messages.push_back("WIFI GOT IP\r\n").unwrap();
+                self.publish_urc(b"WIFI CONNECTED\r\n");
+                self.publish_urc(b"WIFI GOT IP\r\n");
             }
-            b"AT+CIPSTART=0,\"TCP\",\"10.0.0.1\",21\r\n" => self.urc_messages.push_back("0,CONNECT\r\n").unwrap(),
+            b"AT+CIPSTART=0,\"TCP\",\"10.0.0.1\",21\r\n" => self.publish_urc(b"0,CONNECT\r\n"),
             b"AT+CIPSEND=0,6\r\n" => {
-                self.urc_messages.push_back("SEND OK\r\n").unwrap();
-                self.urc_messages.push_back("+IPD,0,16\r\n").unwrap();
+                self.publish_urc(b"SEND OK\r\n");
+                self.publish_urc(b"+IPD,0,16\r\n");
             }
             b"AT+CIPRECVDATA=0,64\r\n" => {
-                self.urc_messages.push_back("+CIPRECVDATA,16:nice to see you!").unwrap();
+                self.publish_urc(b"+CIPRECVDATA,16:nice to see you!");
             }
-            b"AT+CIPCLOSE=0\r\n" => self.urc_messages.push_back("0,CLOSED\r\n").unwrap(),
+            b"AT+CIPCLOSE=0\r\n" => self.publish_urc(b"0,CLOSED\r\n"),
             b"AT+CIFSR\r\n" => {
                 let response = cmd
                     .parse(Ok(
                         b"+CIFSR:STAIP,\"10.0.0.181\"\r\n+CIFSR:STAMAC,\"10:fe:ed:05:ba:50\"\r\n",
                     ))
-                    .map_err(|_| nb::Error::Other(Error::Error))?;
-                return nb::Result::Ok(response);
+                    .map_err(|_| Error::Error)?;
+                return Ok(response);
             }
             &_ => {}
         }
 
-        let response = cmd.parse(Ok(b"\r\n")).map_err(|_| nb::Error::Other(Error::Error))?;
-        nb::Result::Ok(response)
+        let response = cmd.parse(Ok(b"\r\n")).map_err(|_| Error::Error)?;
+        Ok(response)
     }
-
-    fn peek_urc_with<URC: AtatUrc, F: FnOnce(URC::Response) -> bool>(&mut self, f: F) {
-        if self.urc_messages.is_empty() {
-            return;
-        }
-
-        if let Some(message) = URC::parse(self.urc_messages.pop_front().unwrap().as_bytes()) {
-            f(message);
-        }
-    }
-
-    fn check_response<A: AtatCmd<LEN>, const LEN: usize>(&mut self, _cmd: &A) -> nb::Result<A::Response, Error> {
-        nb::Result::Err(nb::Error::WouldBlock)
-    }
-
-    fn get_mode(&self) -> Mode {
-        Mode::Timeout
-    }
-
-    fn reset(&mut self) {}
 }
 
 /// Timer mock

@@ -9,13 +9,15 @@
 //! ````
 //! # use core::str::FromStr;
 //! # use core::net::SocketAddr;
+//! use atat::urc_channel;
 //! # use embedded_nal::{TcpClientStack};
 //! # use esp_at_nal::example::ExampleTimer;
 //! # use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! # use crate::esp_at_nal::example::ExampleAtClient as AtClient;
 //! #
-//! let client = AtClient::default();
-//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 1024> = Adapter::new(client, ExampleTimer::default());
+//! let urc_channel = AtClient::urc_channel();
+//! let client = AtClient::init(&urc_channel);
+//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 128, 8> = Adapter::new(client, urc_channel.subscriber().unwrap(), ExampleTimer::default());
 //!
 //! // Creating a TCP connection
 //! let mut  socket = adapter.socket().unwrap();
@@ -39,7 +41,7 @@ use crate::commands::{
     SetSocketReceivingModeCommand, TransmissionCommand, TransmissionPrepareCommand,
 };
 use crate::wifi::{Adapter, Session};
-use atat::AtatClient;
+use atat::blocking::AtatClient;
 use atat::Error as AtError;
 use core::net::SocketAddr;
 use embedded_nal::{TcpClientStack, TcpError, TcpErrorKind};
@@ -152,8 +154,14 @@ impl TcpError for Error {
     }
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize> TcpClientStack
-    for Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
+impl<
+        A: AtatClient,
+        T: Timer<TIMER_HZ>,
+        const TIMER_HZ: u32,
+        const TX_SIZE: usize,
+        const RX_SIZE: usize,
+        const URC_CAPACITY: usize,
+    > TcpClientStack for Adapter<'_, A, T, TIMER_HZ, TX_SIZE, RX_SIZE, URC_CAPACITY>
 {
     type TcpSocket = Socket;
     type Error = Error;
@@ -282,8 +290,14 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
     }
 }
 
-impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usize, const RX_SIZE: usize>
-    Adapter<A, T, TIMER_HZ, TX_SIZE, RX_SIZE>
+impl<
+        A: AtatClient,
+        T: Timer<TIMER_HZ>,
+        const TIMER_HZ: u32,
+        const TX_SIZE: usize,
+        const RX_SIZE: usize,
+        const URC_CAPACITY: usize,
+    > Adapter<'_, A, T, TIMER_HZ, TX_SIZE, RX_SIZE, URC_CAPACITY>
 {
     /// Returns true if the socket is currently connected. Connection aborts by the remote side are also taken into account.
     /// The current implementation never returns a Error.
@@ -297,7 +311,7 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
         self.session.send_confirmed = None;
         self.session.recv_byte_count = None;
 
-        self.send_command::<TransmissionCommand<'_>, TX_SIZE>(TransmissionCommand::new(data))?;
+        self.send_command::<TransmissionCommand<'_, TX_SIZE>>(TransmissionCommand::new(data))?;
         self.timer.start(self.send_timeout).map_err(|_| Error::TimerError)?;
 
         while self.session.send_confirmed.is_none() {
@@ -306,8 +320,6 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
             if let Some(send_success) = self.session.send_confirmed {
                 // Transmission failed
                 if !send_success {
-                    // Reset prompt status. Otherwise client does not match any command responses.
-                    self.client.reset();
                     return Err(Error::SendFailed(AtError::Error));
                 }
 
@@ -321,8 +333,6 @@ impl<A: AtatClient, T: Timer<TIMER_HZ>, const TIMER_HZ: u32, const TX_SIZE: usiz
 
             match self.timer.wait() {
                 Ok(_) => {
-                    // Reset prompt status. Otherwise client does not match any command responses.
-                    self.client.reset();
                     return Err(Error::SendFailed(AtError::Timeout));
                 }
                 Err(error) => match error {

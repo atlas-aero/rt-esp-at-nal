@@ -16,14 +16,16 @@
 //! ````
 //! use core::str::FromStr;
 //! use core::net::SocketAddr;
+//! use atat::urc_channel;
 //! use embedded_nal::{TcpClientStack};
 //! use esp_at_nal::example::ExampleTimer;
 //! use esp_at_nal::wifi::{Adapter, WifiAdapter};
 //! use crate::esp_at_nal::example::ExampleAtClient as AtClient;
 //!
-//! let client = AtClient::default();
-//! // Creating adapter with 1024 bytes TX and 256 RX block size
-//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 256> = Adapter::new(client, ExampleTimer::default());
+//! let urc_channel = AtClient::urc_channel();
+//! let client = AtClient::init(&urc_channel);
+//! // Creating adapter with 1024 bytes TX and 128 RX block size
+//! let mut adapter: Adapter<_, _, 1_000_000, 1024, 128, 8> = Adapter::new(client, urc_channel.subscriber().unwrap(), ExampleTimer::default());
 //!
 //! // Joining WIFI access point
 //! let state = adapter.join("test_wifi", "secret").unwrap();

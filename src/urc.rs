@@ -7,7 +7,7 @@ use atat::{AtatUrc, Parser};
 use heapless::Vec;
 
 /// URC definitions, needs to passed as generic of [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum URCMessages<const RX_SIZE: usize> {
     /// Modem is ready for receiving AT commands
     Ready,
