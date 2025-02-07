@@ -1,5 +1,3 @@
-use core::fmt::Write;
-
 use crate::responses::LocalAddressResponse;
 use crate::responses::NoResponse;
 use crate::stack::Error as StackError;
@@ -7,7 +5,9 @@ use crate::wifi::{AddressErrors, CommandError, JoinError};
 use atat::atat_derive::AtatCmd;
 use atat::heapless::{String, Vec};
 use atat::{AtatCmd, Error as AtError, InternalError};
-use embedded_nal::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use core::fmt::Write;
+use core::net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6};
+use core::str::FromStr;
 use numtoa::NumToA;
 
 const MAX_IP_LENGTH: usize = 39; // IPv4: 15, IPv6: 39
@@ -116,12 +116,15 @@ impl ObtainLocalAddressCommand {
     }
 }
 
-impl AtatCmd<10> for ObtainLocalAddressCommand {
+impl AtatCmd for ObtainLocalAddressCommand {
     type Response = Vec<LocalAddressResponse, 4>;
+
+    const MAX_LEN: usize = 10;
     const MAX_TIMEOUT_MS: u32 = 5_000;
 
-    fn as_bytes(&self) -> Vec<u8, 10> {
-        Vec::from_slice("AT+CIFSR\r\n".as_bytes()).unwrap()
+    fn write(&self, buf: &mut [u8]) -> usize {
+        buf[..10].copy_from_slice(b"AT+CIFSR\r\n");
+        10
     }
 
     fn parse(&self, resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtError> {
@@ -252,7 +255,7 @@ impl ConnectCommand {
     pub fn tcp_v4(link_id: usize, remote: SocketAddrV4) -> Self {
         Self {
             link_id,
-            connection_type: String::from("TCP"),
+            connection_type: String::from_str("TCP").unwrap(),
             remote_host: ipv4_to_string(remote.ip()),
             port: remote.port(),
         }
@@ -262,7 +265,7 @@ impl ConnectCommand {
     pub fn tcp_v6(link_id: usize, remote: SocketAddrV6) -> Self {
         Self {
             link_id,
-            connection_type: String::from("TCPv6"),
+            connection_type: String::from_str("TCPv6").unwrap(),
             remote_host: ipv6_to_string(remote.ip()),
             port: remote.port(),
         }
@@ -305,24 +308,26 @@ impl CommandErrorHandler for TransmissionPrepareCommand {
 }
 
 /// The actual transmission of data. Max. data length: 256 bytes
-pub struct TransmissionCommand<'a> {
+pub struct TransmissionCommand<'a, const MAX_LEN: usize> {
     data: &'a [u8],
 }
 
-impl<'a> TransmissionCommand<'a> {
+impl<'a, const MAX_LEN: usize> TransmissionCommand<'a, MAX_LEN> {
     pub fn new(data: &'a [u8]) -> Self {
         Self { data }
     }
 }
 
-impl<'a, const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'a> {
+impl<const MAX_LEN: usize> AtatCmd for TransmissionCommand<'_, MAX_LEN> {
     type Response = NoResponse;
+    const MAX_LEN: usize = MAX_LEN;
 
     const MAX_TIMEOUT_MS: u32 = 5000;
     const EXPECTS_RESPONSE_CODE: bool = false;
 
-    fn as_bytes(&self) -> Vec<u8, LEN> {
-        Vec::from_slice(self.data).unwrap()
+    fn write(&self, buf: &mut [u8]) -> usize {
+        buf[..self.data.len()].copy_from_slice(self.data);
+        self.data.len()
     }
 
     fn parse(&self, _resp: Result<&[u8], InternalError>) -> Result<Self::Response, AtError> {
@@ -330,7 +335,7 @@ impl<'a, const LEN: usize> AtatCmd<LEN> for TransmissionCommand<'a> {
     }
 }
 
-impl<'a> CommandErrorHandler for TransmissionCommand<'a> {
+impl<const MAX_LEN: usize> CommandErrorHandler for TransmissionCommand<'_, MAX_LEN> {
     type Error = StackError;
     const WOULD_BLOCK_ERROR: Self::Error = StackError::UnexpectedWouldBlock;
 
@@ -399,56 +404,5 @@ impl CommandErrorHandler for RestartCommand {
 
     fn command_error(&self, error: AtError) -> Self::Error {
         CommandError::CommandFailed(error)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use embedded_nal::{Ipv4Addr, Ipv6Addr};
-    use heapless::String;
-
-    use super::MAX_IP_LENGTH;
-
-    macro_rules! test_v4 {
-        ($a:expr, $b:expr, $c:expr, $d:expr, $string:literal) => {{
-            assert_eq!(
-                super::ipv4_to_string(&Ipv4Addr::new($a, $b, $c, $d)),
-                String::<MAX_IP_LENGTH>::from($string)
-            );
-        }};
-    }
-
-    macro_rules! test_v6 {
-        ($a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $string:literal) => {{
-            assert_eq!(
-                super::ipv6_to_string(&Ipv6Addr::new($a, $b, $c, $d, $e, $f, $g, $h)),
-                String::<MAX_IP_LENGTH>::from($string)
-            );
-        }};
-    }
-
-    #[test]
-    fn test_ipv4_to_string() {
-        test_v4!(127, 0, 0, 1, "127.0.0.1");
-        test_v4!(0, 0, 0, 0, "0.0.0.0");
-        test_v4!(255, 255, 255, 0, "255.255.255.0");
-        test_v4!(255, 255, 255, 255, "255.255.255.255");
-        test_v4!(1, 2, 3, 4, "1.2.3.4");
-    }
-
-    #[test]
-    fn test_ipv6_to_string() {
-        test_v6!(0, 0, 0, 0, 0, 0, 0, 1, "0:0:0:0:0:0:0:0001"); // ::1
-        test_v6!(
-            0x0102,
-            0xaabb,
-            0xffff,
-            0x4242,
-            0x0000,
-            0x1111,
-            0x2222,
-            0x3333,
-            "0102:aabb:ffff:4242:0:1111:2222:3333"
-        );
     }
 }

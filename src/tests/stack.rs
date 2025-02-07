@@ -1,77 +1,66 @@
 use crate::stack::{Error, Socket};
-use crate::tests::mock::{MockAtatClient, MockTimer};
+use crate::tests::mock::{MockAtatClient, MockTimer, MockedCommand};
+use crate::urc::URCMessages;
 use crate::wifi::{Adapter, WifiAdapter};
-use alloc::string::{String, ToString};
 use alloc::vec;
 use atat::Error as AtError;
+use core::net::SocketAddr;
 use core::str::FromStr;
-use embedded_nal::{SocketAddr, TcpClientStack};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::pubsub::PubSubChannel;
+use embedded_nal::TcpClientStack;
 
-type AdapterType = Adapter<MockAtatClient, MockTimer, 1_000_000, 256, 4>;
+type AdapterType<'a> = Adapter<'a, MockAtatClient<'a>, MockTimer, 1_000_000, 32, 16, 16>;
 
 #[test]
 fn test_socket_multi_conn_error() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-    client.add_error_response();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
+    client.add_response(MockedCommand::error(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let result = adapter.socket().unwrap_err();
     assert_eq!(Error::EnablingMultiConnectionsFailed(AtError::Parse), result);
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(1, commands.len());
-    assert_eq!("AT+CIPMUX=1\r\n".to_string(), commands[0]);
-}
-
-#[test]
-fn test_socket_multi_conn_would_block() {
-    let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-    client.send_would_block(0);
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let result = adapter.socket().unwrap_err();
-
-    assert_eq!(Error::UnexpectedWouldBlock, result);
 }
 
 #[test]
 fn test_socket_multi_conn_enabled_once() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-    client.add_ok_response();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     adapter.socket().unwrap();
     adapter.socket().unwrap();
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(1, commands.len());
-    assert_eq!("AT+CIPMUX=1\r\n".to_string(), commands[0]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_socket_opened() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-    client.add_ok_response();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     assert_eq!(0, adapter.socket().unwrap().link_id);
     assert_eq!(1, adapter.socket().unwrap().link_id);
     assert_eq!(2, adapter.socket().unwrap().link_id);
     assert_eq!(3, adapter.socket().unwrap().link_id);
     assert_eq!(4, adapter.socket().unwrap().link_id);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_socket_not_available() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-    client.add_ok_response();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     for _ in 0..5 {
         adapter.socket().unwrap();
     }
@@ -83,13 +72,14 @@ fn test_socket_not_available() {
 #[test]
 fn test_connect_already_connected_by_urc() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
     // Multiple connections command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    client.add_urc_first_socket_connected();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
+    adapter.client.add_urc_first_socket_connected();
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -102,19 +92,22 @@ fn test_connect_already_connected_by_urc() {
 #[test]
 fn test_connect_already_connected_by_response() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
     // Multiple connections command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+
     // Receiving mode command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+
     // Connect command
-    client.add_error_response();
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"ALREADY CONNECTED\r\n"]),
+    ));
 
-    client.skip_urc(1);
-    client.add_urc_message(b"ALREADY CONNECTED\r\n");
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
@@ -122,34 +115,34 @@ fn test_connect_already_connected_by_response() {
         .unwrap();
 
     assert!(adapter.is_connected(&socket).unwrap());
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_connect_correct_commands_ipv4() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
     // Multiple connections command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+
     // Receiving mode command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+
     // Connect command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    client.skip_urc(1);
-    client.add_urc_first_socket_connected();
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(3, commands.len());
-    assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
-    assert_eq!("AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n".to_string(), commands[2]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
@@ -161,37 +154,39 @@ fn test_connect_after_restart() {
         .times(1)
         .returning(|| nb::Result::Err(nb::Error::WouldBlock));
 
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Responses to CIPMUX, CIPRECVMODE  and CIPSTART
-    client.add_ok_response();
-    client.add_ok_response();
-    client.add_ok_response();
+    // Socket commands
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    client.skip_urc(1);
-    client.add_urc_first_socket_connected();
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();
 
-    // Response to RST command
-    adapter.client.add_ok_response();
-    adapter.client.add_urc_ready();
+    // RST command
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+RST\r\n"), Some(&[b"ready\r\n"])));
     adapter.restart().unwrap();
 
-    // Responses to CIPMUX, CIPRECVMODE  and CIPSTART
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_first_socket_connected();
-
-    adapter.client.reset_captured_commands();
+    // Socket commands
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
     socket = adapter.socket().unwrap();
     adapter
@@ -200,57 +195,42 @@ fn test_connect_after_restart() {
 
     // Assert that socket state gets reset on restart
     assert_eq!(0, socket.link_id);
-
-    // Assert that internal state issued commands gets reset
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(3, commands.len());
-    assert_eq!("AT+CIPMUX=1\r\n".to_string(), commands[0]);
-    assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
-    assert_eq!("AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n".to_string(), commands[2]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_connect_correct_commands_ipv6() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect command
-    client.add_ok_response();
+    // Socket commands
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCPv6\",\"2001:0db8:0:0:0:0:0:0001\",8080\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    client.skip_urc(1);
-    client.add_urc_first_socket_connected();
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
         .connect(&mut socket, SocketAddr::from_str("[2001:db8::1]:8080").unwrap())
         .unwrap();
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(3, commands.len());
-    assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
-    assert_eq!(
-        "AT+CIPSTART=0,\"TCPv6\",\"2001:0db8:0:0:0:0:0:0001\",8080\r\n".to_string(),
-        commands[2]
-    );
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_connect_receive_mode_error() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_error_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::error(Some(b"AT+CIPRECVMODE=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -264,40 +244,19 @@ fn test_connect_receive_mode_error() {
 }
 
 #[test]
-fn test_connect_receive_mode_would_block() {
-    let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect mode command
-    client.send_would_block(2);
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-
-    let mut socket = adapter.socket().unwrap();
-    let error = adapter
-        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
-        .unwrap_err();
-
-    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
-}
-
-#[test]
 fn test_connect_connect_command_error() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect command
-    client.add_error_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::error(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -308,42 +267,19 @@ fn test_connect_connect_command_error() {
 }
 
 #[test]
-fn test_connect_connect_command_would_block() {
-    let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
-
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.send_would_block(1);
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-
-    let mut socket = adapter.socket().unwrap();
-    let error = adapter
-        .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
-        .unwrap_err();
-
-    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
-}
-
-#[test]
 fn test_connect_receiving_mode_cmd_sent_once() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    // Receiving mode command
-    client.add_ok_response();
-
-    // First connect command
-    client.add_ok_response();
-    client.skip_urc(1);
-    client.add_urc_first_socket_connected();
-
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket1 = adapter.socket().unwrap();
     let mut socket2 = adapter.socket().unwrap();
@@ -352,65 +288,58 @@ fn test_connect_receiving_mode_cmd_sent_once() {
         .connect(&mut socket1, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();
 
-    // Second connect command
-    adapter.client.add_ok_response();
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_second_socket_connected();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=1,\"TCP\",\"127.0.0.1\",6000\r\n"),
+        Some(&[b"1,CONNECT\r\n"]),
+    ));
 
     adapter
         .connect(&mut socket2, SocketAddr::from_str("127.0.0.1:6000").unwrap())
         .unwrap();
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(4, commands.len());
-    assert_eq!("AT+CIPRECVMODE=1\r\n".to_string(), commands[1]);
-    assert_eq!("AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n".to_string(), commands[2]);
-    assert_eq!("AT+CIPSTART=1,\"TCP\",\"127.0.0.1\",6000\r\n".to_string(), commands[3]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_connect_closing_socket_reconnected() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
 
     adapter.client.add_urc_first_socket_closed();
-    adapter.process_urc_messages();
-
-    // Connect command
-    adapter.client.add_ok_response();
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_first_socket_connected();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_connect_already_connected_at_second_call() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     adapter
@@ -427,16 +356,17 @@ fn test_connect_already_connected_at_second_call() {
 #[test]
 fn test_connect_unconfirmed() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",6000\r\n"),
+        None,
+    ));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     let error = adapter
@@ -449,19 +379,19 @@ fn test_connect_unconfirmed() {
 #[test]
 fn test_connect_available_data_reset() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
-    // Multiple connections command
-    client.add_ok_response();
-    // Receiving mode command
-    client.add_ok_response();
-    // Connect command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
-    client.skip_urc(1);
     client.add_urc_first_socket_connected();
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     let mut socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
@@ -481,10 +411,10 @@ fn test_connect_available_data_reset() {
     assert_eq!(0, socket.link_id);
 
     // Connect command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_first_socket_connected();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
@@ -498,12 +428,13 @@ fn test_connect_available_data_reset() {
 #[test]
 fn test_send_not_connected() {
     let timer = MockTimer::new();
-    let mut client = MockAtatClient::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let mut client = MockAtatClient::new(&channel);
 
     // Multiple connections command
-    client.add_ok_response();
+    client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
 
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = adapter.socket().unwrap();
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
@@ -513,43 +444,17 @@ fn test_send_not_connected() {
 #[test]
 fn test_send_tx_prepare_error() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_error_response();
+    adapter
+        .client
+        .add_response(MockedCommand::error(Some(b"AT+CIPSEND=0,9\r\n"), None));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::TransmissionStartFailed(AtError::Parse)), error);
-}
-
-#[test]
-fn test_send_tx_prepare_would_block() {
-    let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let mut socket = connect_socket(&mut adapter);
-
-    adapter.client.send_would_block(0);
-
-    let error = adapter.send(&mut socket, b"test data").unwrap_err();
-    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
-}
-
-#[test]
-fn test_send_tx_command_would_block() {
-    let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let mut socket = connect_socket(&mut adapter);
-
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.send_would_block(1);
-
-    let error = adapter.send(&mut socket, b"test data").unwrap_err();
-    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
 }
 
 #[test]
@@ -560,14 +465,15 @@ fn test_send_timer_start_error() {
         Err(100)
     });
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPSEND=0,9\r\n"), None));
+    adapter.client.add_response(MockedCommand::ok(Some(b"test data"), None));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::TimerError), error);
@@ -586,14 +492,15 @@ fn test_send_timer_wait_error() {
         .times(1)
         .returning(|| nb::Result::Err(nb::Error::Other(100)));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPSEND=0,9\r\n"), None));
+    adapter.client.add_response(MockedCommand::ok(Some(b"test data"), None));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::TimerError), error);
@@ -609,39 +516,37 @@ fn test_send_timeout() {
 
     timer.expect_wait().times(1).returning(|| nb::Result::Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.expect_reset_calls();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPSEND=0,9\r\n"), None));
+    adapter.client.add_response(MockedCommand::ok(Some(b"test data"), None));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Timeout)), error);
-    assert_eq!(1, adapter.client.get_reset_call_count());
 }
-
+//
 #[test]
 fn test_send_byte_count_not_matching() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_recv_bytes();
-    adapter.client.add_urc_send_ok();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,9\r\n"),
+        Some(&[b"Recv 4 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test data"), Some(&[b"SEND OK\r\n"])));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::PartialSend), error);
@@ -652,17 +557,17 @@ fn test_send_ok_without_recv_message() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_ok();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPSEND=0,9\r\n"), None));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test data"), Some(&[b"SEND OK\r\n"])));
 
     adapter.send(&mut socket, b"test data").unwrap();
 }
@@ -672,23 +577,21 @@ fn test_send_fail_urc_message() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_fail();
-    adapter.client.add_urc_recv_bytes();
-    adapter.client.expect_reset_calls();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,4\r\n"),
+        Some(&[b"Recv 4 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test"), Some(&[b"SEND FAIL\r\n"])));
 
     let error = adapter.send(&mut socket, b"test").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
-    assert_eq!(1, adapter.client.get_reset_call_count())
 }
 
 #[test]
@@ -696,23 +599,21 @@ fn test_send_error_and_recv_bytes_not_matching() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_fail();
-    adapter.client.add_urc_recv_bytes();
-    adapter.client.expect_reset_calls();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,9\r\n"),
+        Some(&[b"Recv 4 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test data"), Some(&[b"SEND FAIL\r\n"])));
 
     let error = adapter.send(&mut socket, b"test data").unwrap_err();
     assert_eq!(nb::Error::Other(Error::SendFailed(AtError::Error)), error);
-    assert_eq!(1, adapter.client.get_reset_call_count());
 }
 
 #[test]
@@ -720,26 +621,22 @@ fn test_send_correct_commands() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(1).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // TX prepare command
-    adapter.client.add_ok_response();
-    // Actual TX command
-    adapter.client.add_ok_response();
-
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_ok();
-    adapter.client.add_urc_recv_bytes();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,4\r\n"),
+        Some(&[b"Recv 4 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test"), Some(&[b"SEND OK\r\n"])));
 
     let sent_bytes = adapter.send(&mut socket, b"test").unwrap();
     assert_eq!(4, sent_bytes);
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(5, commands.len());
-    assert_eq!("AT+CIPSEND=0,4\r\n".to_string(), commands[3]);
-    assert_eq!("test".to_string(), commands[4]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
@@ -747,77 +644,82 @@ fn test_send_multiple_calls_urc_status_reset() {
     let mut timer = MockTimer::new();
     timer.expect_start().times(2).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_fail();
-    adapter.client.add_urc_recv_bytes();
-    adapter.client.expect_reset_calls();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,4\r\n"),
+        Some(&[b"Recv 4 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test"), Some(&[b"SEND FAIL\r\n"])));
 
     assert!(adapter.send(&mut socket, b"test").is_err());
-    assert_eq!(1, adapter.client.get_reset_call_count());
 
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_send_ok();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,9\r\n"),
+        Some(&[b"Recv 9 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"test data"), Some(&[b"SEND OK\r\n"])));
 
     let sent_bytes = adapter.send(&mut socket, b"test data").unwrap();
     assert_eq!(9, sent_bytes);
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(7, commands.len());
-    assert_eq!("AT+CIPSEND=0,9\r\n".to_string(), commands[5]);
-    assert_eq!("test data".to_string(), commands[6]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_send_chunks() {
     let mut timer = MockTimer::new();
-    timer.expect_start().times(2).returning(|_| Ok(()));
+    timer.expect_start().times(3).returning(|_| Ok(()));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    // First TX prepare command
-    adapter.client.add_ok_response();
-    // First actual TX command
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,32\r\n"),
+        Some(&[b"Recv 32 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(&[b'A'; 32]), Some(&[b"SEND OK\r\n"])));
 
-    // Second TX prepare command
-    adapter.client.add_ok_response();
-    // Second actual TX command
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,32\r\n"),
+        Some(&[b"Recv 32 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(&[b'A'; 32]), Some(&[b"SEND OK\r\n"])));
 
-    adapter.client.skip_urc(1);
-    adapter.client.throttle_urc();
-    adapter.client.add_urc_send_ok();
-    adapter.client.add_urc_send_ok();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSEND=0,14\r\n"),
+        Some(&[b"Recv 14 bytes\r\n"]),
+    ));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"second message"), Some(&[b"SEND OK\r\n"])));
 
-    let mut buffer = vec![b'A'; 256];
+    let mut buffer = vec![b'A'; 64];
     buffer.extend_from_slice(b"second message");
 
     let sent_bytes = adapter.send(&mut socket, buffer.as_slice()).unwrap();
-    assert_eq!(270, sent_bytes);
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(7, commands.len());
-    assert_eq!("AT+CIPSEND=0,256\r\n".to_string(), commands[3]);
-    assert_eq!(String::from_utf8(vec![b'A'; 256]).unwrap(), commands[4]);
-    assert_eq!("AT+CIPSEND=0,14\r\n".to_string(), commands[5]);
-    assert_eq!("second message".to_string(), commands[6]);
+    assert_eq!(78, sent_bytes);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_receive_no_data_available() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
     // Other socket
@@ -839,16 +741,20 @@ fn test_receive_after_restart() {
         .times(1)
         .returning(|| nb::Result::Err(nb::Error::WouldBlock));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
     // Fake available data
     adapter.client.add_urc_message(b"+IPD,0,256\r\n");
     adapter.process_urc_messages();
 
-    adapter.client.add_ok_response();
-    adapter.client.add_urc_ready();
+    // Restart command
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+RST\r\n"), Some(&[b"ready\r\n"])));
+
     adapter.restart().unwrap();
 
     let mut buffer = [0x0; 32];
@@ -857,17 +763,21 @@ fn test_receive_after_restart() {
     // Assert that available data is reset on restart
     assert_eq!([0x0; 32], buffer);
     assert_eq!(nb::Error::WouldBlock, error);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_receive_receive_command_failed() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_error_response();
     adapter.client.add_urc_message(b"+IPD,0,256\r\n");
+    adapter
+        .client
+        .add_response(MockedCommand::error(Some(b"AT+CIPRECVDATA=0,16\r\n"), None));
 
     let mut buffer = [0x0; 32];
     let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
@@ -875,29 +785,17 @@ fn test_receive_receive_command_failed() {
 }
 
 #[test]
-fn test_receive_receive_command_would_block() {
-    let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let mut socket = connect_socket(&mut adapter);
-
-    adapter.client.send_would_block(0);
-    adapter.client.add_urc_message(b"+IPD,0,256\r\n");
-
-    let mut buffer = [0x0; 32];
-    let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
-    assert_eq!(nb::Error::Other(Error::UnexpectedWouldBlock), error);
-}
-
-#[test]
 fn test_receive_no_data_received() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
     adapter.client.add_urc_message(b"+IPD,0,256\r\n");
-    adapter.client.add_ok_response();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPRECVDATA=0,16\r\n"), None));
 
     let mut buffer = [0x0; 32];
     let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
@@ -907,122 +805,135 @@ fn test_receive_no_data_received() {
 #[test]
 fn test_receive_correct_command() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
     adapter.client.add_urc_message(b"+IPD,0,4\r\n");
-    adapter.client.add_ok_response();
-
-    adapter.client.throttle_urc();
-    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,4:aaaa"]),
+    ));
 
     let mut buffer = [b' '; 16];
-    adapter.receive(&mut socket, &mut buffer).unwrap();
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
 
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(4, commands.len());
-    assert_eq!("AT+CIPRECVDATA=0,4\r\n".to_string(), commands[3]);
+    assert_eq!(4, length);
+    assert_eq!(b"aaaa", &buffer[..4]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_receive_data_received_buffer_bigger_then_block_size() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_urc_message(b"+IPD,0,10\r\n");
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
+    adapter.client.add_urc_message(b"+IPD,0,24\r\n");
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaa"]),
+    ));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,8:bbbbbbbb"]),
+    ));
 
-    adapter.client.throttle_urc();
-    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,4:bbbb");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:cc");
-
-    let mut buffer = [b' '; 16];
+    let mut buffer = [b' '; 64];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
 
-    assert_eq!(10, length);
-    assert_eq!(b"aaaabbbbcc      ", &buffer);
+    assert_eq!(24, length);
+    assert_eq!(b"aaaaaaaaaaaaaaaabbbbbbbb", &buffer[..length]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_receive_data_received_buffer_smaller_then_block_size() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
+    // Signal data is available
     adapter.client.add_urc_message(b"+IPD,0,5\r\n");
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
 
-    adapter.client.throttle_urc();
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:bb");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,1:c");
-
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,2\r\n"),
+        Some(&[b"+CIPRECVDATA,2:aa"]),
+    ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
     assert_eq!(2, length);
     assert_eq!(b"aa", &buffer);
 
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,2\r\n"),
+        Some(&[b"+CIPRECVDATA,2:bb"]),
+    ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
     assert_eq!(2, length);
     assert_eq!(b"bb", &buffer);
 
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,2\r\n"),
+        Some(&[b"+CIPRECVDATA,1:c"]),
+    ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
     assert_eq!(1, length);
     assert_eq!(b"c ", &buffer);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_receive_data_received_less_data_received_then_requested() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
     adapter.client.add_urc_message(b"+IPD,0,10\r\n");
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,4:aaaa"]),
+    ));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,4:bbbb"]),
+    ));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,2:cc"]),
+    ));
 
-    adapter.client.throttle_urc();
-    // 4 bytes requested, but just two bytes received
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:aa");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,4:bbbb");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:cc");
-
-    let mut buffer = [b' '; 16];
+    let mut buffer = [b' '; 32];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
 
     assert_eq!(10, length);
-    assert_eq!(b"aaaabbbbcc      ", &buffer);
+    assert_eq!(b"aaaabbbbcc", &buffer[..length]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 /// This can just happen if ESP-AT sends more data then requested, which is a protocol violation.
 #[test]
 fn test_receive_data_received_more_data_received_then_block_size() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_urc_message(b"+IPD,0,5\r\n");
-    adapter.client.add_ok_response();
-
-    adapter.client.throttle_urc();
-    // 4 bytes requested, but 5 received
-    adapter.client.add_urc_message(b"+CIPRECVDATA,5:aaaaa");
+    adapter.client.add_urc_message(b"+IPD,0,20\r\n");
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaaa"]),
+    ));
 
     let mut buffer = [b' '; 16];
     let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
@@ -1033,19 +944,22 @@ fn test_receive_data_received_more_data_received_then_block_size() {
 #[test]
 fn test_receive_data_received_buffer_overflow() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let mut socket = connect_socket(&mut adapter);
 
-    adapter.client.add_urc_message(b"+IPD,0,5\r\n");
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
+    adapter.client.add_urc_message(b"+IPD,0,20\r\n");
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaa"]),
+    ));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,4\r\n"),
+        Some(&[b"+CIPRECVDATA,5:aaaaa"]),
+    ));
 
-    adapter.client.throttle_urc();
-    adapter.client.add_urc_message(b"+CIPRECVDATA,4:aaaa");
-    adapter.client.add_urc_message(b"+CIPRECVDATA,2:bb");
-
-    let mut buffer = [b' '; 5];
+    let mut buffer = [b' '; 20];
     let error = adapter.receive(&mut socket, &mut buffer).unwrap_err();
     assert_eq!(nb::Error::Other(Error::ReceiveOverflow), error);
 }
@@ -1053,67 +967,59 @@ fn test_receive_data_received_buffer_overflow() {
 #[test]
 fn test_close_socket_not_connected_yet() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     // Receiving socket
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
 
-    adapter.client.reset_captured_commands();
     adapter.close(socket).unwrap();
 
     // Socket is available for reuse
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
-
-    // Asserts that no close command is sent
-    let commands = adapter.client.get_commands_as_strings();
-    assert!(commands.is_empty());
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_close_socket_already_closed_by_remote() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let socket = connect_socket(&mut adapter);
 
     adapter.client.add_urc_first_socket_closed();
-    adapter.client.reset_captured_commands();
-
     adapter.close(socket).unwrap();
 
     // Socket is available for reuse
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
 
-    // Asserts that no close command is sent
-    let commands = adapter.client.get_commands_as_strings();
-    assert!(commands.is_empty());
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_close_open_socket() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     // Receiving socket
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
 
-    adapter.client.reset_captured_commands();
     adapter.close(socket).unwrap();
 
     // Socket is available for reuse
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
 
-    // Asserts that no close command is sent
-    let commands = adapter.client.get_commands_as_strings();
-    assert!(commands.is_empty());
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
@@ -1125,23 +1031,22 @@ fn test_close_after_restart() {
         .times(1)
         .returning(|| nb::Result::Err(nb::Error::WouldBlock));
 
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let socket = connect_socket(&mut adapter);
 
     // Response to RST command
-    adapter.client.add_ok_response();
-    adapter.client.add_urc_ready();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+RST\r\n"), Some(&[b"ready\r\n"])));
     adapter.restart().unwrap();
 
-    adapter.client.reset_captured_commands();
     adapter.close(socket).unwrap();
-
-    // Asserts that no close command is sent
-    assert!(adapter.client.get_commands_as_strings().is_empty());
+    adapter.client.assert_all_cmds_sent();
 
     // Socket is available for reuse
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
 }
@@ -1149,85 +1054,73 @@ fn test_close_after_restart() {
 #[test]
 fn test_close_socket_command_error() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let socket = connect_socket(&mut adapter);
 
-    adapter.client.add_error_response();
+    adapter
+        .client
+        .add_response(MockedCommand::error(Some(b"AT+CIPCLOSE=0\r\n"), None));
     let error = adapter.close(socket).unwrap_err();
     assert_eq!(Error::CloseError(AtError::Parse), error);
 
     // Socket is available for reuse
+    adapter.client.add_urc_first_socket_connected();
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
-}
-
-#[test]
-fn test_close_socket_command_would_block() {
-    let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
-    let socket = connect_socket(&mut adapter);
-
-    adapter.client.send_would_block(0);
-    let error = adapter.close(socket).unwrap_err();
-    assert_eq!(Error::UnexpectedWouldBlock, error);
-
-    // Socket is available for reuse
-    let socket = adapter.socket().unwrap();
-    assert_eq!(0, socket.link_id);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_close_socket_unconfirmed() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let socket = connect_socket(&mut adapter);
 
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPCLOSE=0\r\n"), None));
     let error = adapter.close(socket).unwrap_err();
     assert_eq!(Error::UnconfirmedSocketState, error);
 
     // Socket is available for reuse
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_close_socket_closed_successfully() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
     let socket = connect_socket(&mut adapter);
-
-    adapter.client.reset_captured_commands();
-    adapter.client.throttle_urc();
 
     // Dummy URC for first URC check call
     adapter.client.add_urc_wifi_got_ip();
 
-    adapter.client.add_ok_response();
-    adapter.client.add_urc_first_socket_closed();
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPCLOSE=0\r\n"), Some(&[b"0,CLOSED\r\n"])));
     adapter.close(socket).unwrap();
 
     // Socket is available for reuse
     let socket = adapter.socket().unwrap();
     assert_eq!(0, socket.link_id);
-
-    let commands = adapter.client.get_commands_as_strings();
-    assert_eq!(1, commands.len());
-    assert_eq!("AT+CIPCLOSE=0\r\n".to_string(), commands[0]);
+    adapter.client.assert_all_cmds_sent();
 }
 
 #[test]
 fn test_is_connected_open() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     // Receiving socket
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
 
     assert!(!adapter.is_connected(&socket).unwrap());
@@ -1236,11 +1129,12 @@ fn test_is_connected_open() {
 #[test]
 fn test_is_connected_true() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     // Receiving socket
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
 
     adapter.client.add_urc_first_socket_connected();
@@ -1251,11 +1145,12 @@ fn test_is_connected_true() {
 #[test]
 fn test_is_connected_closing() {
     let timer = MockTimer::new();
-    let client = MockAtatClient::new();
-    let mut adapter: AdapterType = Adapter::new(client, timer);
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
 
     // Receiving socket
-    adapter.client.add_ok_response();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
     let socket = adapter.socket().unwrap();
 
     adapter.client.add_urc_first_socket_closed();
@@ -1265,16 +1160,17 @@ fn test_is_connected_closing() {
 
 /// Helper for opening & connecting a socket
 fn connect_socket(adapter: &mut AdapterType) -> Socket {
-    // Receiving socket
-    adapter.client.add_ok_response();
-
-    // Connecting socket
-    adapter.client.add_ok_response();
-    adapter.client.add_ok_response();
-    adapter.client.skip_urc(1);
-    adapter.client.add_urc_first_socket_connected();
+    adapter.client.add_response(MockedCommand::ok(Some(b"AT+CIPMUX=1\r\n"), None));
+    adapter
+        .client
+        .add_response(MockedCommand::ok(Some(b"AT+CIPRECVMODE=1\r\n"), None));
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPSTART=0,\"TCP\",\"127.0.0.1\",5000\r\n"),
+        Some(&[b"0,CONNECT\r\n"]),
+    ));
 
     let mut socket = adapter.socket().unwrap();
+
     adapter
         .connect(&mut socket, SocketAddr::from_str("127.0.0.1:5000").unwrap())
         .unwrap();

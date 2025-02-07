@@ -48,27 +48,29 @@ fn test_first_parse_empty_line() {
     assert_result(b"ready\r\n", 9, b"\r\nready\r\n");
 }
 
+/// As WIFI status messages are sometimes not properly terminated by double CLRF
+/// CLRF ist not removed from the buffer, so length-2 is returned
 #[test]
 fn test_first_parse_wifi() {
-    assert_result(b"WIFI CONNECTED\r\n", 16, b"WIFI CONNECTED\r\n");
-    assert_result(b"WIFI CONNECTED\r\n", 16, b"WIFI CONNECTED\r\nNEXT_LINE\r\n");
-    assert_result(b"WIFI CONNECTED\r\n", 16, b"WIFI CONNECTED\r\nready\r\n");
-    assert_result(b"WIFI CONNECTED\r\n", 16, b"WIFI CONNECTED\r\nincomplete");
+    assert_result(b"WIFI CONNECTED\r\n", 14, b"WIFI CONNECTED\r\n");
+    assert_result(b"WIFI CONNECTED\r\n", 14, b"WIFI CONNECTED\r\nNEXT_LINE\r\n");
+    assert_result(b"WIFI CONNECTED\r\n", 14, b"WIFI CONNECTED\r\nready\r\n");
+    assert_result(b"WIFI CONNECTED\r\n", 14, b"WIFI CONNECTED\r\nincomplete");
 
-    assert_result(b"WIFI DISCONNECT\r\n", 17, b"WIFI DISCONNECT\r\n");
-    assert_result(b"WIFI DISCONNECT\r\n", 17, b"WIFI DISCONNECT\r\nNEXT_LINE\r\n");
-    assert_result(b"WIFI DISCONNECT\r\n", 17, b"WIFI DISCONNECT\r\nready\r\n");
-    assert_result(b"WIFI DISCONNECT\r\n", 17, b"WIFI DISCONNECT\r\nincomplete");
+    assert_result(b"WIFI DISCONNECT\r\n", 15, b"WIFI DISCONNECT\r\n");
+    assert_result(b"WIFI DISCONNECT\r\n", 15, b"WIFI DISCONNECT\r\nNEXT_LINE\r\n");
+    assert_result(b"WIFI DISCONNECT\r\n", 15, b"WIFI DISCONNECT\r\nready\r\n");
+    assert_result(b"WIFI DISCONNECT\r\n", 15, b"WIFI DISCONNECT\r\nincomplete");
 
-    assert_result(b"WIFI GOT IP\r\n", 13, b"WIFI GOT IP\r\n");
-    assert_result(b"WIFI GOT IP\r\n", 13, b"WIFI GOT IP\r\nNEXT_LINE\r\n");
-    assert_result(b"WIFI GOT IP\r\n", 13, b"WIFI GOT IP\r\nready\r\n");
-    assert_result(b"WIFI GOT IP\r\n", 13, b"WIFI GOT IP\r\nincomplete");
+    assert_result(b"WIFI GOT IP\r\n", 11, b"WIFI GOT IP\r\n");
+    assert_result(b"WIFI GOT IP\r\n", 11, b"WIFI GOT IP\r\nNEXT_LINE\r\n");
+    assert_result(b"WIFI GOT IP\r\n", 11, b"WIFI GOT IP\r\nready\r\n");
+    assert_result(b"WIFI GOT IP\r\n", 11, b"WIFI GOT IP\r\nincomplete");
 
-    assert_result(b"WIFI UNKNOWN\r\n", 14, b"WIFI UNKNOWN\r\n");
-    assert_result(b"WIFI UNKNOWN\r\n", 14, b"WIFI UNKNOWN\r\nNEXT_LINE\r\n");
-    assert_result(b"WIFI UNKNOWN\r\n", 14, b"WIFI UNKNOWN\r\nready\r\n");
-    assert_result(b"WIFI UNKNOWN\r\n", 14, b"WIFI UNKNOWN\r\nincomplete");
+    assert_result(b"WIFI UNKNOWN\r\n", 12, b"WIFI UNKNOWN\r\n");
+    assert_result(b"WIFI UNKNOWN\r\n", 12, b"WIFI UNKNOWN\r\nNEXT_LINE\r\n");
+    assert_result(b"WIFI UNKNOWN\r\n", 12, b"WIFI UNKNOWN\r\nready\r\n");
+    assert_result(b"WIFI UNKNOWN\r\n", 12, b"WIFI UNKNOWN\r\nincomplete");
 }
 
 #[test]

@@ -7,7 +7,7 @@ use atat::{AtatUrc, Parser};
 use heapless::Vec;
 
 /// URC definitions, needs to passed as generic of [AtDigester](atat::digest::AtDigester): `AtDigester<URCMessages>`
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum URCMessages<const RX_SIZE: usize> {
     /// Modem is ready for receiving AT commands
     Ready,
@@ -201,6 +201,10 @@ impl<'a> LineBasedMatcher<'a> {
                 break;
             }
 
+            if self.matches_blank_without_cl_rf(line) {
+                return Ok((&self.buffer[start..end], end - 2));
+            }
+
             if self.matches_lines_based_urc(line) {
                 return Ok((&self.buffer[start..end], end));
             }
@@ -210,13 +214,18 @@ impl<'a> LineBasedMatcher<'a> {
         Err(ParseError::NoMatch)
     }
 
+    /// True if WIFI status message is matched.
+    /// As this messages sometimes are not properly ended with double CLRF, we just return them without CLRF
+    fn matches_blank_without_cl_rf(&self, line: &str) -> bool {
+        &line[..4] == "WIFI"
+    }
+
     /// True if a regular CRLF terminated URC message was matched
     fn matches_lines_based_urc(&self, line: &str) -> bool {
         line == "ready"
             || &line[..4] == "+IPD"
             || line == "SEND OK"
             || line == "SEND FAIL"
-            || &line[..4] == "WIFI"
             || &line[1..] == ",CONNECT"
             || &line[1..] == ",CLOSED"
             || line == "ALREADY CONNECTED"
@@ -285,7 +294,7 @@ struct DataMessage<'a> {
     pub data: &'a [u8],
 }
 
-impl<'a> DataMessage<'a> {
+impl DataMessage<'_> {
     /// Copies all serial data to a vector
     fn to_vec<const LEN: usize>(&self) -> Option<Vec<u8, LEN>> {
         let mut vec = Vec::new();
