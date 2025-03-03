@@ -44,6 +44,7 @@
 #[cfg(test)]
 extern crate alloc;
 
+pub mod asynch;
 pub(crate) mod commands;
 pub mod example;
 pub(crate) mod responses;

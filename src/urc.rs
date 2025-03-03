@@ -46,7 +46,7 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
             return URCMessages::parse_data_available(resp);
         }
 
-        if resp.len() > 15 && &resp[..13] == b"+CIPRECVDATA," {
+        if resp.len() > 15 && &resp[..13] == b"+CIPRECVDATA:" {
             let message = DataResponseParser::new(resp).parse().ok()?;
             return Some(Self::Data(message.to_vec()?));
         }
@@ -149,7 +149,7 @@ impl<'a> SizeBasedMatcher<'a> {
         let start = buffer.iter().enumerate().find(|x| x.1 != &b'\r' && x.1 != &b'\n')?.0;
 
         let data = &buffer[start..];
-        if data.len() < 13 || &data[..13] != b"+CIPRECVDATA," {
+        if data.len() < 13 || &data[..13] != b"+CIPRECVDATA:" {
             return None;
         }
 
@@ -263,7 +263,7 @@ impl<'a> DataResponseParser<'a> {
             .buffer
             .iter()
             .enumerate()
-            .find(|x| x.1 == &b':')
+            .find(|x| x.1 == &b',')
             .ok_or(ParseError::Incomplete)?
             .0;
         let length_str = core::str::from_utf8(&self.buffer[13..separator]).map_err(|_| ParseError::NoMatch)?;
