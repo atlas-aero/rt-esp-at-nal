@@ -69,7 +69,7 @@ pub(crate) struct SocketState {
     pub(crate) state: ConnectionState,
 
     /// Data length in bytes available to receive which is buffered by ESP-AT
-    pub(crate) data_available: usize,
+    pub(crate) data_available: Option<usize>,
 }
 
 /// Internal connection state
@@ -395,34 +395,39 @@ impl<
 
 impl<const RX_SIZE: usize> Session<RX_SIZE> {
     /// Fetches the next open socket ID and returns None in case no socket is available
-    fn get_next_open(&self) -> Option<usize> {
+    pub(crate) fn get_next_open(&self) -> Option<usize> {
         self.sockets.iter().position(|state| state.state == ConnectionState::Closed)
     }
 
     /// Returns true if data is available for the given socket
-    fn is_data_available(&self, socket: &Socket) -> bool {
-        self.sockets[socket.link_id].data_available > 0
+    pub(crate) fn is_data_available(&self, socket: &Socket) -> bool {
+        self.sockets[socket.link_id].data_available.map_or(false, |x| x > 0)
+    }
+
+    pub(crate) fn take_data_available(&mut self, socket: &Socket) -> Option<usize> {
+        self.sockets[socket.link_id].data_available.take()
     }
 
     /// Reduces the available data length mark by the given length of the given socket ID
-    fn reduce_available_data(&mut self, socket: &Socket, length: usize) {
-        if self.sockets[socket.link_id].data_available < length {
-            self.sockets[socket.link_id].data_available = 0;
-            return;
-        }
+    pub(crate) fn reduce_available_data(&mut self, socket: &Socket, length: usize) {
+        self.sockets[socket.link_id].data_available = self.sockets[socket.link_id].data_available.map(|x| {
+            if x < length {
+                return 0;
+            }
 
-        self.sockets[socket.link_id].data_available -= length;
+            x - length
+        });
     }
 
     /// Returns true if the reported received byte length does NOT match the actual data length
     /// Returns false if received byte count was not reported by ESP-AT (older firmware version)
-    fn is_received_byte_count_incorrect(&self, actual_data_length: usize) -> bool {
+    pub(crate) fn is_received_byte_count_incorrect(&self, actual_data_length: usize) -> bool {
         self.recv_byte_count.is_some() && *self.recv_byte_count.as_ref().unwrap() != actual_data_length
     }
 
     /// Sets the available data of the given socket to zero
-    fn reset_available_data(&mut self, socket: &Socket) {
-        self.sockets[socket.link_id].data_available = 0;
+    pub(crate) fn reset_available_data(&mut self, socket: &Socket) {
+        self.sockets[socket.link_id].data_available = None;
     }
 
     /// Returns true if the given socket is in OPEN state
@@ -436,12 +441,12 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
     }
 
     /// Returns true if the given socket is in CLOSING state
-    fn is_socket_closing(&self, socket: &Socket) -> bool {
+    pub(crate) fn is_socket_closing(&self, socket: &Socket) -> bool {
         self.sockets[socket.link_id].state == ConnectionState::Closing
     }
 
     /// Returns true if the given socket is in CONNECTED state
-    fn is_socket_connected(&self, socket: &Socket) -> bool {
+    pub(crate) fn is_socket_connected(&self, socket: &Socket) -> bool {
         self.sockets[socket.link_id].state == ConnectionState::Connected
     }
 }

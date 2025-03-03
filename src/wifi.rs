@@ -114,13 +114,13 @@ pub struct Adapter<
 #[derive(Default)]
 pub(crate) struct Session<const RX_SIZE: usize> {
     /// Currently joined to WIFI network? Gets updated by URC messages.
-    joined: bool,
+    pub(crate) joined: bool,
 
     /// True if an IP was assigned by access point. Get updated by URC message.
-    ip_assigned: bool,
+    pub(crate) ip_assigned: bool,
 
     /// True if a URC ready message arrived.
-    ready: bool,
+    pub(crate) ready: bool,
 
     /// True if multiple connections have been enabled
     pub(crate) multi_connections_enabled: bool,
@@ -165,7 +165,7 @@ impl<const RX_SIZE: usize> Session<RX_SIZE> {
             URCMessages::SendFail => self.send_confirmed = Some(false),
             URCMessages::DataAvailable(link_id, length) => {
                 if link_id < self.sockets.len() {
-                    self.sockets[link_id].data_available = length;
+                    self.sockets[link_id].data_available = Some(length);
                 }
             }
             URCMessages::Data(data) => self.data = Some(data),
