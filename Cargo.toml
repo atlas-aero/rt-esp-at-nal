@@ -12,7 +12,7 @@ readme = "README.md"
 documentation = "https://docs.rs/esp-at-nal"
 
 [dependencies]
-atat = { git="https://github.com/FactbirdHQ/atat.git", rev="2f55331d7e2d1cdae37804fbe9fa1a78def95fa8"}
+atat = "0.24.0"
 embedded-nal = "0.9"
 nb = "1.1"
 fugit = "0.3"
