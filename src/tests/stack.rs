@@ -813,6 +813,30 @@ fn test_receive_correct_command() {
     adapter.client.add_urc_message(b"+IPD,0,4\r\n");
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
+        Some(&[b"+CIPRECVDATA:4,aaaa"]),
+    ));
+
+    let mut buffer = [b' '; 16];
+    let length = adapter.receive(&mut socket, &mut buffer).unwrap();
+
+    assert_eq!(4, length);
+    assert_eq!(b"aaaa", &buffer[..4]);
+    adapter.client.assert_all_cmds_sent();
+}
+
+#[test]
+/// Out-of-spec response covering bug in older ESP-AT firmware versions
+/// See https://github.com/atlas-aero/rt-esp-at-nal/issues/23
+fn test_receive_correct_command_out_of_spec() {
+    let timer = MockTimer::new();
+    let channel: PubSubChannel<CriticalSectionRawMutex, URCMessages<16>, 16, 1, 1> = PubSubChannel::new();
+    let client = MockAtatClient::new(&channel);
+    let mut adapter: AdapterType = Adapter::new(client, channel.subscriber().unwrap(), timer);
+    let mut socket = connect_socket(&mut adapter);
+
+    adapter.client.add_urc_message(b"+IPD,0,4\r\n");
+    adapter.client.add_response(MockedCommand::ok(
+        Some(b"AT+CIPRECVDATA=0,16\r\n"),
         Some(&[b"+CIPRECVDATA,4:aaaa"]),
     ));
 
@@ -835,11 +859,11 @@ fn test_receive_data_received_buffer_bigger_then_block_size() {
     adapter.client.add_urc_message(b"+IPD,0,24\r\n");
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaa"]),
+        Some(&[b"+CIPRECVDATA:16,aaaaaaaaaaaaaaaa"]),
     ));
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,8:bbbbbbbb"]),
+        Some(&[b"+CIPRECVDATA:8,bbbbbbbb"]),
     ));
 
     let mut buffer = [b' '; 64];
@@ -863,7 +887,7 @@ fn test_receive_data_received_buffer_smaller_then_block_size() {
 
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,2\r\n"),
-        Some(&[b"+CIPRECVDATA,2:aa"]),
+        Some(&[b"+CIPRECVDATA:2,aa"]),
     ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
@@ -872,7 +896,7 @@ fn test_receive_data_received_buffer_smaller_then_block_size() {
 
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,2\r\n"),
-        Some(&[b"+CIPRECVDATA,2:bb"]),
+        Some(&[b"+CIPRECVDATA:2,bb"]),
     ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
@@ -881,7 +905,7 @@ fn test_receive_data_received_buffer_smaller_then_block_size() {
 
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,2\r\n"),
-        Some(&[b"+CIPRECVDATA,1:c"]),
+        Some(&[b"+CIPRECVDATA:1,c"]),
     ));
     let mut buffer = [b' '; 2];
     let length = adapter.receive(&mut socket, &mut buffer).unwrap();
@@ -901,15 +925,15 @@ fn test_receive_data_received_less_data_received_then_requested() {
     adapter.client.add_urc_message(b"+IPD,0,10\r\n");
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,4:aaaa"]),
+        Some(&[b"+CIPRECVDATA:4,aaaa"]),
     ));
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,4:bbbb"]),
+        Some(&[b"+CIPRECVDATA:4,bbbb"]),
     ));
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,2:cc"]),
+        Some(&[b"+CIPRECVDATA:2,cc"]),
     ));
 
     let mut buffer = [b' '; 32];
@@ -932,7 +956,7 @@ fn test_receive_data_received_more_data_received_then_block_size() {
     adapter.client.add_urc_message(b"+IPD,0,20\r\n");
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaaa"]),
+        Some(&[b"+CIPRECVDATA:16,aaaaaaaaaaaaaaaaa"]),
     ));
 
     let mut buffer = [b' '; 16];
@@ -952,11 +976,11 @@ fn test_receive_data_received_buffer_overflow() {
     adapter.client.add_urc_message(b"+IPD,0,20\r\n");
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,16\r\n"),
-        Some(&[b"+CIPRECVDATA,16:aaaaaaaaaaaaaaaa"]),
+        Some(&[b"+CIPRECVDATA:16,aaaaaaaaaaaaaaaa"]),
     ));
     adapter.client.add_response(MockedCommand::ok(
         Some(b"AT+CIPRECVDATA=0,4\r\n"),
-        Some(&[b"+CIPRECVDATA,5:aaaaa"]),
+        Some(&[b"+CIPRECVDATA:5,aaaaa"]),
     ));
 
     let mut buffer = [b' '; 20];

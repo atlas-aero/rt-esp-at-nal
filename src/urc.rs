@@ -46,7 +46,7 @@ impl<const RX_SIZE: usize> AtatUrc for URCMessages<RX_SIZE> {
             return URCMessages::parse_data_available(resp);
         }
 
-        if resp.len() > 15 && &resp[..13] == b"+CIPRECVDATA," {
+        if resp.len() > 15 && &resp[..12] == b"+CIPRECVDATA" && (resp[12] == b',' || resp[12] == b':') {
             let message = DataResponseParser::new(resp).parse().ok()?;
             return Some(Self::Data(message.to_vec()?));
         }
@@ -149,7 +149,7 @@ impl<'a> SizeBasedMatcher<'a> {
         let start = buffer.iter().enumerate().find(|x| x.1 != &b'\r' && x.1 != &b'\n')?.0;
 
         let data = &buffer[start..];
-        if data.len() < 13 || &data[..13] != b"+CIPRECVDATA," {
+        if data.len() < 13 || &data[..12] != b"+CIPRECVDATA" || (data[12] != b',' && data[12] != b':') {
             return None;
         }
 
@@ -250,11 +250,17 @@ impl<'a> LineBasedMatcher<'a> {
 /// Decodes a +CIPRECVDATA message
 struct DataResponseParser<'a> {
     buffer: &'a [u8],
+
+    /// Data separator char, needed for backward compatibility with out-of-spec bug with older ESP-AT
+    /// firmwares, see: https://github.com/atlas-aero/rt-esp-at-nal/issues/23
+    data_separator: u8,
 }
 
 impl<'a> DataResponseParser<'a> {
     pub fn new(buffer: &'a [u8]) -> Self {
-        Self { buffer }
+        let data_separator = if buffer[12] == b',' { b':' } else { b',' };
+
+        Self { buffer, data_separator }
     }
 
     /// Parses the length and returns both the usize length + length string
@@ -263,7 +269,7 @@ impl<'a> DataResponseParser<'a> {
             .buffer
             .iter()
             .enumerate()
-            .find(|x| x.1 == &b':')
+            .find(|x| x.1 == &self.data_separator)
             .ok_or(ParseError::Incomplete)?
             .0;
         let length_str = core::str::from_utf8(&self.buffer[13..separator]).map_err(|_| ParseError::NoMatch)?;
