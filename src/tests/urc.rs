@@ -27,6 +27,7 @@ fn test_first_parse_previous_ok() {
     assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n").is_err());
     assert!(<URCMessages<32> as Parser>::parse(b"OK\r\nWIFI GOT IP\r\n").is_err());
     assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n+CIPRECVDATA,5:abcde").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"OK\r\n+CIPRECVDATA:5,abcde").is_err());
 }
 
 #[test]
@@ -126,12 +127,17 @@ fn test_first_parse_data_prefix_incomplete() {
     assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA,").is_err());
     assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,").is_err());
     assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,6").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA:").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA:").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA:6").is_err());
 }
 
 #[test]
 fn test_first_parse_data_serial_data_incomplete() {
     assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA,5:abcd").is_err());
     assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA,5:abcd").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"+CIPRECVDATA:5,abcd").is_err());
+    assert!(<URCMessages<32> as Parser>::parse(b"\r\n+CIPRECVDATA:5,abcd").is_err());
 }
 
 #[test]
@@ -148,6 +154,7 @@ fn test_first_parse_boot_matches() {
 
 #[test]
 fn test_first_parse_data_fully_received() {
+    // Out of spec implementation for covering older ESP-AT version bug
     assert_result(b"+CIPRECVDATA,5:abcde", 20, b"+CIPRECVDATA,5:abcde\r\n\r\nOK\r\n");
     assert_result(
         b"+CIPRECVDATA,10:abcdefghij",
@@ -157,6 +164,17 @@ fn test_first_parse_data_fully_received() {
     assert_result(b"+CIPRECVDATA,8:abcde\r\nH", 23, b"+CIPRECVDATA,8:abcde\r\nH\r\nOK\r\n");
     assert_result(b"+CIPRECVDATA,5:abcde", 20, b"+CIPRECVDATA,5:abcde");
     assert_result(b"+CIPRECVDATA,5:abcde", 24, b"\r\n\r\n+CIPRECVDATA,5:abcde");
+
+    // Actual correct response according to spec
+    assert_result(b"+CIPRECVDATA:5,abcde", 20, b"+CIPRECVDATA:5,abcde\r\n\r\nOK\r\n");
+    assert_result(
+        b"+CIPRECVDATA:10,abcdefghij",
+        26,
+        b"+CIPRECVDATA:10,abcdefghij\r\n\r\nOK\r\n",
+    );
+    assert_result(b"+CIPRECVDATA:8,abcde\r\nH", 23, b"+CIPRECVDATA:8,abcde\r\nH\r\nOK\r\n");
+    assert_result(b"+CIPRECVDATA:5,abcde", 20, b"+CIPRECVDATA:5,abcde");
+    assert_result(b"+CIPRECVDATA:5,abcde", 24, b"\r\n\r\n+CIPRECVDATA:5,abcde");
 }
 
 #[test]
@@ -290,16 +308,24 @@ fn test_second_parse_data_available_invalid_numbers() {
 
 #[test]
 fn test_second_parse_data() {
+    // Out of spec implementation for covering older ESP-AT version bug
     assert_eq!(
         URCMessages::<32>::Data(Vec::from_slice(b"abcde").unwrap()),
         <URCMessages<32> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").unwrap()
+    );
+
+    // Actual correct response according to spec
+    assert_eq!(
+        URCMessages::<32>::Data(Vec::from_slice(b"abcde").unwrap()),
+        <URCMessages<32> as AtatUrc>::parse(b"+CIPRECVDATA:5,abcde").unwrap()
     );
 }
 
 #[test]
 fn test_second_parse_longer_then_block_size() {
     // Basically this can just happen if ESP-AT sends more data then requested, which is a protocol violation
-    assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").is_none())
+    assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA,5:abcde").is_none());
+    assert!(<URCMessages<4> as AtatUrc>::parse(b"+CIPRECVDATA:5,abcde").is_none());
 }
 
 fn assert_result(string: &[u8], size: usize, data: &[u8]) {
@@ -309,7 +335,10 @@ fn assert_result(string: &[u8], size: usize, data: &[u8]) {
             assert_eq!(result.1, size);
         }
         Err(_) => {
-            panic!("Parsed failed");
+            panic!(
+                "Parsing '{:?}' failed",
+                core::str::from_utf8(data).unwrap_or("<invalid UTF-8>")
+            );
         }
     }
 }
